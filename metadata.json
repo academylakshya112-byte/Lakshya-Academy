@@ -1,0 +1,6 @@
+{
+  "name": "Lakshya Academy Ghazipur",
+  "description": "Lakshya Academy Ghazipur is a professional Android Learning App offering modern blue branding, visual dashboards, local sandbox administration, and premium learning tools.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
