@@ -23,6 +23,7 @@ data class LessonEntity(
     val chapterName: String,
     val title: String,
     val videoUrl: String,
+    val folder: String = "General", // e.g. "All video", "PDF Notes"
     val pdfUrl: String,
     val pdfName: String,
     val pdfContent: String = "",
@@ -73,6 +74,7 @@ data class TestScoreEntity(
     val totalQuestions: Int,
     val correctAnswers: Int,
     val wrongAnswers: Int,
+    val selectedAnswersJson: String = "{}", // Map of questionId -> selectedIndex
     val timestamp: Long = System.currentTimeMillis()
 )
 
@@ -116,13 +118,26 @@ data class MaterialEntity(
     val fileContent: String = ""
 )
 
+// ... (previous content)
 @Entity(tableName = "banners")
 data class BannerEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val title: String,
-    val imageUrl: String = "",       // URL link or Uri
-    val linkUrl: String = "",        // target deep link/action action details
-    val buttonText: String = "VIEW", // label like VIEW, ENROLL, JOIN
+    val imageUrl: String = "",
+    val linkUrl: String = "",
+    val buttonText: String = "VIEW",
     val description: String = "",
     val isActive: Boolean = true
+)
+
+@Entity(tableName = "live_classes")
+data class LiveClassEntity(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val title: String,
+    val subject: String,
+    val teacherName: String,
+    val thumbnailUri: String = "",
+    val isLive: Boolean = false,
+    val scheduledTime: Long = 0,
+    val recordingUri: String = ""
 )

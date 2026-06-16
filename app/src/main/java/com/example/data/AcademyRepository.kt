@@ -130,4 +130,15 @@ class AcademyRepository(private val academyDao: AcademyDao) {
     suspend fun deleteBanner(id: Int) {
         academyDao.deleteBannerById(id)
     }
+
+    // === Live Classes ===
+    val allLiveClasses: Flow<List<LiveClassEntity>> = academyDao.getAllLiveClasses()
+
+    suspend fun insertLiveClass(liveClass: LiveClassEntity) {
+        academyDao.insertLiveClass(liveClass)
+    }
+
+    suspend fun deleteLiveClass(id: Int) {
+        academyDao.deleteLiveClassById(id)
+    }
 }

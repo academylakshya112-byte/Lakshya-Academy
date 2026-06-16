@@ -115,6 +115,16 @@ interface AcademyDao {
 
     @Query("DELETE FROM banners WHERE id = :id")
     suspend fun deleteBannerById(id: Int)
+
+    // === Live Classes ===
+    @Query("SELECT * FROM live_classes ORDER BY scheduledTime ASC")
+    fun getAllLiveClasses(): Flow<List<LiveClassEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertLiveClass(liveClass: LiveClassEntity)
+
+    @Query("DELETE FROM live_classes WHERE id = :id")
+    suspend fun deleteLiveClassById(id: Int)
 }
 
 @Database(
@@ -129,9 +139,10 @@ interface AcademyDao {
         ChatMessageEntity::class,
         NotificationEntity::class,
         MaterialEntity::class,
-        BannerEntity::class
+        BannerEntity::class,
+        LiveClassEntity::class
     ],
-    version = 3,
+    version = 7,
     exportSchema = false
 )
 abstract class AcademyDatabase : RoomDatabase() {
@@ -148,7 +159,7 @@ abstract class AcademyDatabase : RoomDatabase() {
                     AcademyDatabase::class.java,
                     "academy_database"
                 )
-                .fallbackToDestructiveMigration()
+                .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
                 @Suppress("UpdateOfToValue")
                 INSTANCE = instance

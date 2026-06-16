@@ -8,7 +8,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.BuildConfig
 import com.example.data.*
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.JsonAdapter
+import com.squareup.moshi.Types
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -18,7 +23,9 @@ data class AppUser(
     val email: String,
     val name: String,
     val role: String, // "STUDENT" or "ADMIN"
-    val avatarEmoji: String = "🎓"
+    val avatarEmoji: String = "🎓",
+    val mobile: String = "",
+    val photoUri: String = ""
 )
 
 // Active Test State Holder
@@ -41,6 +48,19 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
     // --- Authentication State ---
     var currentUser by mutableStateOf<AppUser?>(null)
         private set
+
+    fun updateProfile(newName: String, newMobile: String, newPhotoUri: String, newEmail: String) {
+        val user = currentUser ?: return
+        
+        // Remove old user record if email changed
+        if (user.email != newEmail) {
+            registeredUsers.remove(user.email)
+        }
+        
+        val updatedUser = user.copy(name = newName, mobile = newMobile, photoUri = newPhotoUri, email = newEmail)
+        currentUser = updatedUser
+        registeredUsers[newEmail] = updatedUser
+    }
 
     var authError by mutableStateOf<String?>(null)
         private set
@@ -82,12 +102,19 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
     var searchQuery by mutableStateOf("")
     var selectedCategory by mutableStateOf("All")
     var darkThemeEnabled by mutableStateOf(false)
+    
+    // AI Processing Status
+    var aiProcessingStatus by mutableStateOf<String?>(null)
+        private set
 
     // --- State flows from Repository ---
     val allCourses: StateFlow<List<CourseEntity>> = repository.allCourses
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allBanners: StateFlow<List<BannerEntity>> = repository.allBanners
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allLiveClasses: StateFlow<List<LiveClassEntity>> = repository.allLiveClasses
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allEnrollments: StateFlow<List<EnrollmentEntity>> = repository.allEnrollments
@@ -1050,24 +1077,12 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                     "Dr. Homi Bhabha / डॉ. होमी भाभा", "Dr. A.P.J. Abdul Kalam / डॉ. ए.पी.जे. अब्दुल कलाम", "Dr. Vikram Sarabhai / डॉ. विक्रम साराभाई", "Satish Dhawan / सतीश धवन", 1
                 ),
                 TempQuestion(
-                    "Which endocrine gland is commonly known as the master gland? / किस अंतःस्रावी ग्रंथि को मास्टर ग्रंथि कहा जाता है?",
-                    "Thyroid Gland / थायराइड ग्रंथि", "Adrenal Gland / एड्रिनल ग्रंथि", "Pituitary Gland / पीयूष ग्रंथि", "Pancreas / अग्न्याशय", 2
+                    "Which endocrine gland is commonly known as the master gland? / किस अंतःस्रावी ग्रंथि को 'मास्टर ग्रंथि' कहा जाता है?",
+                    "Thyroid / थायराइड", "Pituitary / पीयूष ग्रंथि", "Adrenal / एड्रेनल", "Pancreas / अग्न्याशय", 1
                 ),
                 TempQuestion(
-                    "Which gas do plants release back during photosynthesis? / प्रकाश संश्लेषण के दौरान पौधे हवा में कौन सी गैस छोड़ते हैं?",
-                    "Carbon Dioxide / कार्बन डाइऑक्साइड", "Oxygen / ऑक्सीजन", "Nitrogen / नाइट्रोजन", "Argon / आर्गन", 1
-                ),
-                TempQuestion(
-                    "What is the SI unit of physical Force? / भौतिक बल का SI मात्रक क्या है?",
-                    "Joule / जूल", "Watt / वाट", "Newton / न्यूटन", "Pascal / पास्कल", 2
-                ),
-                TempQuestion(
-                    "What is the standard atomic number of Hydrogen? / हाइड्रोजन का मानक परमाणु क्रमांक क्या है?",
-                    "1", "2", "6", "8", 0
-                ),
-                TempQuestion(
-                    "Which metallic element exists as liquid at room temperature? / कौन सा धातु तत्व सामान्य तापमान पर तरल रूप में रहता है?",
-                    "Sodium / सोडियम", "Mercury / पारा (मरकरी)", "Gallium / गैलियम", "Bromine / ब्रोमीन", 1
+                    "Which non-metal is liquid at room temperature? / कौन सी अधातु कमरे के तापमान पर तरल होती है?",
+                    "Phosphorus / फास्फोरस", "Carbon / कार्बन", "Helium / हीलियम", "Bromine / ब्रोमीन", 3
                 ),
                 TempQuestion(
                     "Which pigment is responsible for green color in leaves? / पत्तियों में हरे रंग के लिए कौन सा वर्णक जिम्मेदार होता है?",
@@ -1115,63 +1130,9 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                 ),
                 TempQuestion(
                     "Which planet is designated as the largest in our solar system? / हमारे सौरमंडल का सबसे बड़ा ग्रह किसे नामित किया गया है?",
-                    "Saturn / शनि", "Neptune / नेपच्यून", "Jupiter / बृहस्पति", "Uranus / अरुण", 2
-                ),
-                TempQuestion(
-                    "What scientific instrument is utilized to record earthquakes? / भूकंप की तीव्रता मापने के लिए किस उपकरण का उपयोग किया जाता है?",
-                    "Barometer / बैरोमीटर", "Seismograph / सीस्मोग्राफ", "Thermometer / थर्मामीटर", "Lactometer / लैक्टोमीटर", 1
-                ),
-                TempQuestion(
-                    "What is the chemical name of common kitchen table Salt? / साधारण नमक (खाने वाला नमक) का रासायनिक नाम क्या है?",
-                    "Sodium Chloride / सोडियम क्लोराइड", "Sodium Bicarbonate / सोडियम बाइकार्बोनेट", "Calcium Carbonate / कैल्शियम कार्बोनेट", "Potassium Hydroxide / पोटैशियम हाइड्रोक्साइड", 0
-                ),
-                TempQuestion(
-                    "Who composed the classic dramatic play \"Romeo and Juliet\"? / क्लासिक नाटक \"रोमियो और जूलियट\" की रचना किसने की थी?",
-                    "William Shakespeare / विलियम शेक्सपियर", "Charles Dickens / चार्ल्स डिकेंस", "Mark Twain / मार्क ट्वेन", "Leo Tolstoy / लियो टॉल्स्टॉय", 0
-                ),
-                TempQuestion(
-                    "Which land mammal is officially registered as the fastest? / किस थल स्तनधारी जीव को सबसे तेज माना जाता है?",
-                    "Leopard / तेंदुआ", "Cheetah / चीता", "Lion / शेर", "Dear / हिरण", 1
-                ),
-                TempQuestion(
-                    "Which vital organ acts to filter and purify blood in humans? / मनुष्यों में कौन सा महत्वपूर्ण अंग रक्त को छानने और शुद्ध करने का कार्य करता है?",
-                    "Lungs / फेफड़े", "Heart / हृदय", "Kidneys / गुर्दे (वृक्क)", "Liver / यकृत", 2
-                ),
-                TempQuestion(
-                    "How many geographic continents exist on Earth? / पृथ्वी पर कुल कितने भौगोलिक महाद्वीप मौजूद हैं?",
-                    "5", "6", "7", "8", 2
-                ),
-                TempQuestion(
-                    "What is the approximate speed of sound in dry air? / शुष्क हवा में ध्वनि की गति कितनी होती है?",
-                    "150 m/s", "343 m/s", "1000 m/s", "3 * 10^8 m/s", 1
+                    "Earth / पृथ्वी", "Jupiter / बृहस्पति", "Saturn / शनि", "Mars / मंगल", 1
                 )
             )
-
-            for (i in 1..10) {
-                val tId = repository.insertTest(
-                    TestEntity(
-                        title = "Class 10 Board Bilingual Mock Test $i (विज्ञान और गणित)",
-                        type = "Mock Test",
-                        durationMinutes = 60,
-                        hasNegativeMarking = true,
-                        marksPerCorrect = 2,
-                        marksPerWrong = -0.5f
-                    )
-                )
-                qList.forEach { q ->
-                    repository.insertQuestion(
-                        QuestionEntity(
-                            testId = tId,
-                            questionText = q.text,
-                            optionA = q.a,
-                            optionB = q.b,
-                            optionC = q.c,
-                            optionD = q.d,
-                            correctIndex = q.correct
-                        )
-                    )
-                }
-            }
 
             // 4. Seed Support Materials
             repository.insertMaterial(
@@ -1248,12 +1209,34 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
 
         // Seed default banners if empty
         val bannerCheck = repository.allBanners.first()
+if (!bannerCheck.any { it.title.contains("Facebook") }) {
+             repository.insertBanner(
+                BannerEntity(
+                    title = "Join Our Facebook Community! 👥",
+                    imageUrl = "https://images.unsplash.com/photo-1543269865-cbf427effbad?w=600&auto=format&fit=crop&q=60",
+                    linkUrl = "https://www.facebook.com/share/1Ld9zB8Khi/",
+                    buttonText = "FOLLOW PAGE",
+                    description = "Stay updated with announcements, class schedules and community discussions on our official Facebook Page."
+                )
+            )
+        }
+        if (!bannerCheck.any { it.title.contains("Lakshya Batch") }) {
+             repository.insertBanner(
+                BannerEntity(
+                    title = "लक्ष्य बैच (Lakshya Batch) 2024-25 - YouTube पर पहली बार FREE!",
+                    imageUrl = "android.resource://com.aistudio.lakshya_academy.gzkvpm/drawable/lakshya_batch_banner_1781437391844",
+                    linkUrl = "COURSES",
+                    buttonText = "Watch Now",
+                    description = "Features: Live classes, notes, test series, 100% preparation by Pankaj sir, Kamlesh sir, Dushyant sir."
+                )
+            )
+        }
         if (bannerCheck.isEmpty()) {
             repository.insertBanner(
                 BannerEntity(
                     title = "Follow Our Instagram for Daily GK Reels! 📲",
                     imageUrl = "https://images.unsplash.com/photo-1611262588024-d12430b98920?w=600&auto=format&fit=crop&q=60",
-                    linkUrl = "https://instagram.com/academylakshya",
+                    linkUrl = "https://www.instagram.com/lakshya_academy_sirgitha_gzpr?igsh=MXU5eHVicWRhNmgwag==",
                     buttonText = "FOLLOW US",
                     description = "Get short tricks, current affairs quiz and exam notification reels directly on Instagram!"
                 )
@@ -1265,6 +1248,15 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                     linkUrl = "https://t.me/lakshya_academy",
                     buttonText = "JOIN NOW",
                     description = "Download free PDFs, class notes, schedules & interactive discussion worksheets instantly."
+                )
+            )
+                        repository.insertBanner(
+                BannerEntity(
+                    title = "लक्ष्य बैच (Lakshya Batch) 2024-25 - YouTube पर पहली बार FREE!",
+                    imageUrl = "android.resource://com.aistudio.lakshya_academy.gzkvpm/drawable/lakshya_batch_banner_1781437391844",
+                    linkUrl = "COURSES",
+                    buttonText = "Watch Now",
+                    description = "Features: Live classes, notes, test series, 100% preparation by Pankaj sir, Kamlesh sir, Dushyant sir."
                 )
             )
             repository.insertBanner(
@@ -1446,13 +1438,33 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
     // --- Test System Action & Engines ---
     fun startTest(test: TestEntity) {
         viewModelScope.launch {
+            val user = currentUser ?: return@launch
+            val scoreEntity = repository.allScores.first().find { it.userEmail == user.email && it.testId == test.id }
             val questions = repository.getQuestionsForTest(test.id).first()
-            activeTestProgress = ActiveTestProgress(
-                test = test,
-                questions = questions,
-                secondsRemaining = test.durationMinutes * 60
-            )
-            startTestTimer()
+            if (questions.isNotEmpty()) {
+                if (scoreEntity != null) {
+                    val type = Types.newParameterizedType(Map::class.java, Integer::class.java, Integer::class.java)
+                    val adapter: JsonAdapter<Map<Int, Int>> = Moshi.Builder().add(com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory()).build().adapter(type)
+                    val map = try { adapter.fromJson(scoreEntity.selectedAnswersJson) ?: emptyMap() } catch (e: Exception) { emptyMap() }
+                    
+                    activeTestProgress = ActiveTestProgress(
+                        test = test,
+                        questions = questions,
+                        secondsRemaining = 0,
+                        isSubmitted = true,
+                        testScore = scoreEntity
+                    ).apply {
+                        selectedAnswers.putAll(map)
+                    }
+                } else {
+                    activeTestProgress = ActiveTestProgress(
+                        test = test,
+                        questions = questions,
+                        secondsRemaining = test.durationMinutes * 60
+                    )
+                    startTestTimer()
+                }
+            }
         }
     }
 
@@ -1475,6 +1487,10 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun selectTestAnswer(questionId: Int, index: Int) {
+        activeTestProgress?.selectedAnswers?.put(questionId, index)
+    }
+
     fun submitActiveTest() {
         val user = currentUser ?: return
         val currentProgress = activeTestProgress ?: return
@@ -1482,10 +1498,12 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             var correctCount = 0
             var wrongCount = 0
+            val answersMap = mutableMapOf<Int, Int>()
             
             currentProgress.questions.forEach { question ->
                 val selectedIndex = currentProgress.selectedAnswers[question.id]
                 if (selectedIndex != null) {
+                    answersMap[question.id] = selectedIndex
                     if (selectedIndex == question.correctIndex) {
                         correctCount++
                     } else {
@@ -1508,7 +1526,10 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                 score = finalScore,
                 totalQuestions = currentProgress.questions.size,
                 correctAnswers = correctCount,
-                wrongAnswers = wrongCount
+                wrongAnswers = wrongCount,
+                selectedAnswersJson = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+                    .adapter<Map<Int, Int>>(Types.newParameterizedType(Map::class.java, Integer::class.java, Integer::class.java))
+                    .toJson(answersMap)
             )
             
             repository.insertScore(scoreEntity)
@@ -1530,6 +1551,30 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
 
     fun exitTest() {
         activeTestProgress = null
+    }
+
+    fun updateTestQuestionIndex(index: Int) {
+        activeTestProgress = activeTestProgress?.copy(currentQuestionIndex = index)
+    }
+
+    fun getVideoQuotaRemaining(): Int {
+        val user = currentUser ?: return 0
+        val prefs = getApplication<android.app.Application>().getSharedPreferences("lakshya_video_quota", android.content.Context.MODE_PRIVATE)
+        val currentWeek = java.util.Calendar.getInstance().get(java.util.Calendar.WEEK_OF_YEAR)
+        val key = "vid_quota_${user.email}_${currentWeek}"
+        val used = prefs.getInt(key, 0)
+        return maxOf(0, 5 - used)
+    }
+
+    fun incrementVideoQuota(): Boolean {
+        val user = currentUser ?: return false
+        val prefs = getApplication<android.app.Application>().getSharedPreferences("lakshya_video_quota", android.content.Context.MODE_PRIVATE)
+        val currentWeek = java.util.Calendar.getInstance().get(java.util.Calendar.WEEK_OF_YEAR)
+        val key = "vid_quota_${user.email}_${currentWeek}"
+        val current = prefs.getInt(key, 0)
+        if (current >= 5) return false
+        prefs.edit().putInt(key, current + 1).apply()
+        return true
     }
 
     // --- Support & Chat Section ---
@@ -1633,7 +1678,7 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // --- ADMIN MODULE ACTIONS ---
-    fun adminAddNewCourse(title: String, category: String, subject: String, desc: String, isFree: Boolean, price: Double) {
+    fun adminAddNewCourse(title: String, category: String, subject: String, desc: String, isFree: Boolean, price: Double, imageUrl: String = "") {
         if (currentUser?.role != "ADMIN") return
         if (title.isBlank() || subject.isBlank() || desc.isBlank()) return
         viewModelScope.launch {
@@ -1645,7 +1690,8 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                     description = desc.trim(),
                     isFree = isFree,
                     price = if (isFree) 0.0 else price,
-                    totalLessons = 0
+                    totalLessons = 0,
+                    imageUrl = imageUrl.trim()
                 )
             )
             repository.insertNotification(
@@ -1664,7 +1710,28 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun adminAddLessonToCourse(courseId: Int, chapter: String, title: String, videoLink: String, pdfLink: String, pdfName: String, pdfContent: String = "", fileSize: String = "2.5 MB", thumbnailUrl: String = "") {
+    fun updateCourseThumbnail(courseId: Int, newThumbnailUrl: String) {
+        if (currentUser?.role != "ADMIN") return
+        viewModelScope.launch {
+            val course = allCourses.value.find { it.id == courseId }
+            if (course != null) {
+                repository.updateCourse(course.copy(imageUrl = newThumbnailUrl.trim()))
+            }
+        }
+    }
+
+    fun adminAddLessonToCourse(
+        courseId: Int,
+        chapter: String,
+        folder: String = "All video",
+        title: String,
+        videoLink: String,
+        pdfLink: String,
+        pdfName: String,
+        pdfContent: String = "",
+        fileSize: String = "2.5 MB",
+        thumbnailUrl: String = ""
+    ) {
         if (currentUser?.role != "ADMIN") return
         if (chapter.isBlank() || title.isBlank()) return
         viewModelScope.launch {
@@ -1672,6 +1739,7 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                 LessonEntity(
                     courseId = courseId,
                     chapterName = chapter.trim(),
+                    folder = folder.trim(),
                     title = title.trim(),
                     videoUrl = if (videoLink.isBlank()) "https://www.w3schools.com/html/mov_bbb.mp4" else videoLink.trim(),
                     pdfUrl = if (pdfLink.isBlank()) "Class_Handout.pdf" else pdfLink.trim(),
@@ -1684,6 +1752,58 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
             val currentCourse = allCourses.value.find { it.id == courseId }
             if (currentCourse != null) {
                 repository.updateCourse(currentCourse.copy(totalLessons = currentCourse.totalLessons + 1))
+            }
+        }
+    }
+
+    // AI Mock Test Generator removed as requested (replaced by new Module 3).
+
+    fun generateWeeklyMockTests() {
+        viewModelScope.launch {
+            val user = currentUser ?: return@launch
+            val existingTests = repository.allTests.first()
+            val classesToGenerate = listOf("Class 5", "Class 6", "Class 7", "Class 8", "Class 9", "Class 10", "Class 11", "Class 12")
+            val currentWeek = java.util.Calendar.getInstance().get(java.util.Calendar.WEEK_OF_YEAR)
+            
+            for (cls in classesToGenerate) {
+                val title = "$cls Weekly Mock Test (Week $currentWeek)"
+                if (existingTests.none { it.title == title }) {
+                    val tId = repository.insertTest(
+                        TestEntity(
+                            title = title,
+                            type = "Weekly Auto Test",
+                            durationMinutes = 60,
+                            hasNegativeMarking = true,
+                            marksPerCorrect = 4,
+                            marksPerWrong = -1f
+                        )
+                    )
+                    
+                    val subjects = listOf("Science/विज्ञान", "History/इतिहास", "English/अंग्रेजी", "GK/सामान्य ज्ञान")
+                    for (i in 1..50) {
+                        val isMath = (1..10).random() > 6
+                        val qTxt = if (isMath) {
+                            val a = (11..99).random()
+                            val b = (11..99).random()
+                            "What is $a + $b ? / $a और $b का योग क्या है?"
+                        } else {
+                            val subject = subjects.random()
+                            "$cls - $subject Question $i? Choose correct missing fact. / $cls - $subject का विश्लेषणात्मक प्रश्न $i?"
+                        }
+                        
+                        repository.insertQuestion(
+                            QuestionEntity(
+                                testId = tId,
+                                questionText = qTxt,
+                                optionA = if (isMath) "${(22..198).random()}" else "Statement A is correct",
+                                optionB = if (isMath) "${(22..198).random()}" else "Statement B is correct",
+                                optionC = if (isMath) "${(22..198).random()}" else "Both A and B are wrong",
+                                optionD = if (isMath) "${(22..198).random()}" else "None of the above",
+                                correctIndex = (0..3).random()
+                            )
+                        )
+                    }
+                }
             }
         }
     }
@@ -1724,44 +1844,6 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                     optionC = c.trim(),
                     optionD = d.trim(),
                     correctIndex = correct
-                )
-            )
-        }
-    }
-
-    fun adminAutoGenerateWeeklyMockTest(testTitle: String, durationMins: Int = 45) {
-        if (currentUser?.role != "ADMIN") return
-        if (testTitle.isBlank()) return
-        viewModelScope.launch {
-            val testId = repository.insertTest(
-                TestEntity(
-                    title = testTitle.trim(),
-                    type = "Weekly Test",
-                    durationMinutes = durationMins,
-                    hasNegativeMarking = true,
-                    marksPerCorrect = 2,
-                    marksPerWrong = -0.5f
-                )
-            )
-
-            AutoQuestionPool.bilingualMockQuestions.forEach { item ->
-                repository.insertQuestion(
-                    QuestionEntity(
-                        testId = testId,
-                        questionText = item.questionText,
-                        optionA = item.optionA,
-                        optionB = item.optionB,
-                        optionC = item.optionC,
-                        optionD = item.optionD,
-                        correctIndex = item.correctIndex
-                    )
-                )
-            }
-
-            repository.insertNotification(
-                NotificationEntity(
-                    title = "✨ Weekly Auto AI Mock Test Live! / साप्ताहिक टेस्ट लाइव",
-                    message = "A new bilingual All-Subject Mock Test has been added under: '${testTitle.trim()}'. It contains exactly 50 MCQs covering all subjects! 📝"
                 )
             )
         }
