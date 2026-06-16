@@ -126,25 +126,7 @@ fun AiDoubtSolverScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
     var isListening by remember { mutableStateOf(false) }
     var currentVolumeDb by remember { mutableFloatStateOf(0f) }
     
-    val speechContext = remember(context) {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-            context.createAttributionContext("voice_input")
-        } else {
-            context
-        }
-    }
-    
-    val speechRecognizer = remember {
-        try {
-            if (android.speech.SpeechRecognizer.isRecognitionAvailable(speechContext)) {
-                android.speech.SpeechRecognizer.createSpeechRecognizer(speechContext)
-            } else {
-                null
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
+    var speechRecognizerState by remember { mutableStateOf<android.speech.SpeechRecognizer?>(null) }
 
     val recognitionListener = remember {
         object : android.speech.RecognitionListener {
@@ -191,11 +173,30 @@ fun AiDoubtSolverScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
         }
     }
 
-    DisposableEffect(speechRecognizer) {
-        speechRecognizer?.setRecognitionListener(recognitionListener)
+    val getOrCreateSpeechRecognizer = remember(context, recognitionListener) {
+        {
+            var current = speechRecognizerState
+            if (current == null) {
+                try {
+                    if (android.speech.SpeechRecognizer.isRecognitionAvailable(context)) {
+                        val r = android.speech.SpeechRecognizer.createSpeechRecognizer(context)
+                        r.setRecognitionListener(recognitionListener)
+                        speechRecognizerState = r
+                        current = r
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            current
+        }
+    }
+
+    DisposableEffect(Unit) {
         onDispose {
             try {
-                speechRecognizer?.destroy()
+                speechRecognizerState?.destroy()
+                speechRecognizerState = null
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -257,7 +258,7 @@ fun AiDoubtSolverScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
                 putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
             }
             try {
-                speechRecognizer?.startListening(intent)
+                getOrCreateSpeechRecognizer()?.startListening(intent)
                 isListening = true
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -404,7 +405,7 @@ fun AiDoubtSolverScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
                                             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
                                         }
                                         try {
-                                            speechRecognizer?.startListening(intent)
+                                            getOrCreateSpeechRecognizer()?.startListening(intent)
                                             isListening = true
                                         } catch (e: Exception) {
                                             e.printStackTrace()
@@ -742,7 +743,7 @@ fun AiDoubtSolverScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
     if (isListening) {
         Dialog(
             onDismissRequest = {
-                try { speechRecognizer?.cancel() } catch (e: Exception) {}
+                try { speechRecognizerState?.cancel() } catch (e: Exception) {}
                 isListening = false
             },
             properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -903,7 +904,7 @@ fun AiDoubtSolverScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
 
                     Button(
                         onClick = {
-                            try { speechRecognizer?.stopListening() } catch (e: Exception) {}
+                            try { speechRecognizerState?.stopListening() } catch (e: Exception) {}
                             isListening = false
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f)),

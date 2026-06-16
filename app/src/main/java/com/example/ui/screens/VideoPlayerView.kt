@@ -92,6 +92,22 @@ fun VideoPlayerView(
     }
 
     val activity = context.findActivity()
+
+    // Add back hander to exit full screen first
+    androidx.activity.compose.BackHandler(enabled = isFullScreen) {
+        activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        onFullScreenToggle(false)
+    }
+
+    // Ensure the screen is reset to portrait when the video player view is disposed (navigated back / closed)
+    DisposableEffect(Unit) {
+        onDispose {
+            activity?.let { act ->
+                act.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+        }
+    }
+
     DisposableEffect(isFullScreen) {
         val window = activity?.window
         if (window != null) {
