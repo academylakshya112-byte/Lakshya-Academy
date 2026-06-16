@@ -25,6 +25,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.ui.theme.*
@@ -138,13 +143,46 @@ fun MockPdfViewerScreen(
     var currentPage by remember { mutableIntStateOf(1) }
     val totalPages = pages.size
 
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.White)
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+
+    val state = rememberTransformableState { zoomChange, offsetChange, _ ->
+        scale = (scale * zoomChange).coerceIn(1f, 4f)
+        if (scale > 1f) {
+            offset = Offset(offset.x + offsetChange.x, offset.y + offsetChange.y)
+        } else {
+            offset = Offset.Zero
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
+    ) {
+        val dialogWindow = (androidx.compose.ui.platform.LocalView.current.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
+        LaunchedEffect(Unit) {
+            dialogWindow?.let { window ->
+                window.setLayout(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.WHITE))
+            }
+        }
+
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = Color.White
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .padding(16.dp)
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = null) }
                     Column {
@@ -156,17 +194,55 @@ fun MockPdfViewerScreen(
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(16.dp))
                 Box(
-                    modifier = Modifier.weight(1f).fillMaxWidth().background(Color(0xFFF1F5F9)).padding(16.dp)
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .background(Color(0xFFF1F5F9))
+                        .transformable(state = state)
+                        .clickable(enabled = scale > 1f) {
+                            scale = 1f
+                            offset = Offset.Zero
+                        }
+                        .padding(16.dp),
+                    contentAlignment = Alignment.TopStart
                 ) {
-                    Text(pages.getOrElse(currentPage - 1) { "" }, color = Color.DarkGray, fontSize = 15.sp, lineHeight = 24.sp)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer(
+                                scaleX = scale,
+                                scaleY = scale,
+                                translationX = offset.x,
+                                translationY = offset.y
+                            )
+                    ) {
+                        Text(pages.getOrElse(currentPage - 1) { "" }, color = Color.DarkGray, fontSize = 15.sp, lineHeight = 24.sp)
+                    }
+                    if (scale > 1f) {
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.7f),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(8.dp)
+                        ) {
+                            Text(
+                                "Tap to Reset Zoom",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Button(onClick = { if (currentPage > 1) currentPage-- }, enabled = currentPage > 1, shape = RoundedCornerShape(8.dp)) {
+                    Button(onClick = { if (currentPage > 1) { currentPage--; scale = 1f; offset = Offset.Zero } }, enabled = currentPage > 1, shape = RoundedCornerShape(8.dp)) {
                         Text("Prev Page", fontSize = 12.sp)
                     }
                     Text("Page $currentPage of $totalPages", color = Color.Black, fontSize = 13.sp)
-                    Button(onClick = { if (currentPage < totalPages) currentPage++ }, enabled = currentPage < totalPages, shape = RoundedCornerShape(8.dp)) {
+                    Button(onClick = { if (currentPage < totalPages) { currentPage++; scale = 1f; offset = Offset.Zero } }, enabled = currentPage < totalPages, shape = RoundedCornerShape(8.dp)) {
                         Text("Next Page", fontSize = 12.sp)
                     }
                 }

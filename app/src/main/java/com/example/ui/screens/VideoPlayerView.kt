@@ -91,20 +91,54 @@ fun VideoPlayerView(
         }
     }
 
-    Box(
-        modifier = Modifier
+    val activity = context.findActivity()
+    DisposableEffect(isFullScreen) {
+        val window = activity?.window
+        if (window != null) {
+            val controller = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+            if (isFullScreen) {
+                controller.hide(androidx.core.view.WindowInsetsCompat.Type.statusBars() or androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+                controller.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            } else {
+                controller.show(androidx.core.view.WindowInsetsCompat.Type.statusBars() or androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+            }
+        }
+        onDispose {
+            window?.let { w ->
+                val controller = androidx.core.view.WindowCompat.getInsetsController(w, w.decorView)
+                controller.show(androidx.core.view.WindowInsetsCompat.Type.statusBars() or androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+            }
+        }
+    }
+
+    val playerModifier = if (isFullScreen) {
+        Modifier.fillMaxSize()
+    } else {
+        Modifier
             .fillMaxWidth()
-            .aspectRatio(if (isFullScreen) 2.1f else 16 / 9f)
+            .aspectRatio(16 / 9f)
+    }
+
+    Box(
+        modifier = playerModifier
             .background(Color.Black)
             .transformable(state = transformState)
             .clickable { showControls = !showControls }
     ) {
         AndroidView(
-            factory = {
-                PlayerView(it).apply {
+            factory = { ctx ->
+                PlayerView(ctx).apply {
                     player = exoPlayer
                     useController = false
+                    resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    layoutParams = android.view.ViewGroup.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                    )
                 }
+            },
+            update = { view ->
+                view.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
             },
             modifier = Modifier
                 .fillMaxSize()

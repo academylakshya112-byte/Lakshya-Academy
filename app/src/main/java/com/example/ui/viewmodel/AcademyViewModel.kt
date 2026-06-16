@@ -1756,6 +1756,17 @@ if (!bannerCheck.any { it.title.contains("Facebook") }) {
         }
     }
 
+    fun adminDeleteLesson(lessonId: Int, courseId: Int) {
+        if (currentUser?.role != "ADMIN") return
+        viewModelScope.launch {
+            repository.deleteLesson(lessonId)
+            val currentCourse = allCourses.value.find { it.id == courseId }
+            if (currentCourse != null) {
+                repository.updateCourse(currentCourse.copy(totalLessons = (currentCourse.totalLessons - 1).coerceAtLeast(0)))
+            }
+        }
+    }
+
     // AI Mock Test Generator removed as requested (replaced by new Module 3).
 
     fun generateWeeklyMockTests() {

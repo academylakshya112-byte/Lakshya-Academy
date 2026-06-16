@@ -12,6 +12,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -27,6 +28,23 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Stop
+import android.content.Intent
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.speech.RecognitionListener
+import android.os.Bundle
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import android.Manifest
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.animation.core.*
@@ -73,10 +91,14 @@ fun AiDoubtSolverScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
     var inputQuery by remember { mutableStateOf("") }
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
     var selectedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var uncroppedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var showCropDialog by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var isGeneratingVideo by remember { mutableStateOf(false) }
     var videoProgress by remember { mutableStateOf(0f) }
     var teacherVideoMessage by remember { mutableStateOf<String?>(null) }
+    var selectedLanguage by remember { mutableStateOf("Hindi") }
+    var videoQuotaRemaining by remember { mutableStateOf(viewModel.getVideoQuotaRemaining()) }
     
     var tts by remember { mutableStateOf<TextToSpeech?>(null) }
     
@@ -84,16 +106,99 @@ fun AiDoubtSolverScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
         var textToSpeech: TextToSpeech? = null
         textToSpeech = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                textToSpeech?.language = Locale("hi", "IN")
+                textToSpeech?.language = if (selectedLanguage == "Hindi") Locale("hi", "IN") else Locale.US
             }
         }
         tts = textToSpeech
+    }
+
+    LaunchedEffect(selectedLanguage, tts) {
+        tts?.language = if (selectedLanguage == "Hindi") Locale("hi", "IN") else Locale.US
     }
     
     DisposableEffect(Unit) {
         onDispose {
             tts?.stop()
             tts?.shutdown()
+        }
+    }
+
+    var isListening by remember { mutableStateOf(false) }
+    var currentVolumeDb by remember { mutableFloatStateOf(0f) }
+    
+    val speechContext = remember(context) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            context.createAttributionContext("voice_input")
+        } else {
+            context
+        }
+    }
+    
+    val speechRecognizer = remember {
+        try {
+            if (android.speech.SpeechRecognizer.isRecognitionAvailable(speechContext)) {
+                android.speech.SpeechRecognizer.createSpeechRecognizer(speechContext)
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    val recognitionListener = remember {
+        object : android.speech.RecognitionListener {
+            override fun onReadyForSpeech(params: android.os.Bundle?) {
+                isListening = true
+                currentVolumeDb = 0f
+            }
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {
+                currentVolumeDb = rmsdB.coerceIn(0f, 12f)
+            }
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {
+                isListening = false
+            }
+            override fun onError(error: Int) {
+                isListening = false
+                val errMsg = when(error) {
+                    android.speech.SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
+                    android.speech.SpeechRecognizer.ERROR_CLIENT -> "Client error"
+                    android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Insufficient permissions"
+                    android.speech.SpeechRecognizer.ERROR_NETWORK -> "Network error"
+                    android.speech.SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
+                    android.speech.SpeechRecognizer.ERROR_NO_MATCH -> "No speech recognized. Try again."
+                    android.speech.SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy. Please wait."
+                    android.speech.SpeechRecognizer.ERROR_SERVER -> "Server error"
+                    android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech detected. Try again."
+                    else -> "Voice input error"
+                }
+                Toast.makeText(context, errMsg, Toast.LENGTH_SHORT).show()
+            }
+            override fun onResults(results: android.os.Bundle?) {
+                isListening = false
+                val matches = results?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
+                if (!matches.isNullOrEmpty()) {
+                    val spokenText = matches[0]
+                    if (spokenText.isNotBlank()) {
+                        inputQuery = if (inputQuery.isBlank()) spokenText else "$inputQuery $spokenText"
+                    }
+                }
+            }
+            override fun onPartialResults(partialResults: android.os.Bundle?) {}
+            override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
+        }
+    }
+
+    DisposableEffect(speechRecognizer) {
+        speechRecognizer?.setRecognitionListener(recognitionListener)
+        onDispose {
+            try {
+                speechRecognizer?.destroy()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
     
@@ -109,35 +214,56 @@ fun AiDoubtSolverScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
                     inputStream?.close()
                     
                     if (originalBitmap != null) {
-                        val maxDimension = 1024
-                        val width = originalBitmap.width
-                        val height = originalBitmap.height
-                        val ratio = width.toFloat() / height.toFloat()
-                        
-                        var newWidth = width
-                        var newHeight = height
-                        if (width > maxDimension || height > maxDimension) {
-                            if (ratio > 1) {
-                                newWidth = maxDimension
-                                newHeight = (maxDimension / ratio).toInt()
-                            } else {
-                                newHeight = maxDimension
-                                newWidth = (maxDimension * ratio).toInt()
-                            }
-                        }
-                        
-                        val scaledBitmap = Bitmap.createScaledBitmap(originalBitmap, newWidth, newHeight, true)
-                        
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                            selectedBitmap = scaledBitmap
+                            uncroppedBitmap = originalBitmap
+                            showCropDialog = true
                         }
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 } catch (e: OutOfMemoryError) {
-                    e.printStackTrace() // Catch OOM directly!
+                    e.printStackTrace()
                 }
             }
+        }
+    }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap: Bitmap? ->
+        if (bitmap != null) {
+            uncroppedBitmap = bitmap
+            showCropDialog = true
+        }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            cameraLauncher.launch(null)
+        } else {
+            Toast.makeText(context, "Camera permission is required to capture photos.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, if (selectedLanguage == "Hindi") "hi-IN" else "en-US")
+                putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            }
+            try {
+                speechRecognizer?.startListening(intent)
+                isListening = true
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        } else {
+            Toast.makeText(context, "Microphone permission is required for voice input.", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -157,6 +283,44 @@ fun AiDoubtSolverScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    Row(
+                        modifier = Modifier
+                            .padding(end = 12.dp)
+                            .background(Color.LightGray.copy(alpha = 0.3f), RoundedCornerShape(24.dp))
+                            .padding(2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(if (selectedLanguage == "Hindi") Color(0xFF6366F1) else Color.Transparent)
+                                .clickable { selectedLanguage = "Hindi" }
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                "हिन्दी",
+                                color = if (selectedLanguage == "Hindi") Color.White else Color.DarkGray,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(if (selectedLanguage == "English") Color(0xFF6366F1) else Color.Transparent)
+                                .clickable { selectedLanguage = "English" }
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                "Eng",
+                                color = if (selectedLanguage == "English") Color.White else Color.DarkGray,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
@@ -198,21 +362,63 @@ fun AiDoubtSolverScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
                         .padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(
-                        onClick = { photoPickerLauncher.launch("image/*") },
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(Icons.Default.AddPhotoAlternate, contentDescription = "Attach Photo", tint = Color.Gray)
-                    }
-                    
                     OutlinedTextField(
                         value = inputQuery,
                         onValueChange = { inputQuery = it },
                         placeholder = { Text("Ask your doubt...") },
                         modifier = Modifier
                             .weight(1f)
-                            .padding(horizontal = 8.dp),
+                            .padding(end = 8.dp),
                         shape = RoundedCornerShape(24.dp),
+                        leadingIcon = {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 4.dp)) {
+                                IconButton(
+                                    onClick = { photoPickerLauncher.launch("image/*") },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(Icons.Default.AddPhotoAlternate, contentDescription = "Gallery", tint = Color(0xFF6366F1), modifier = Modifier.size(20.dp))
+                                }
+                                IconButton(
+                                    onClick = {
+                                        val hasCameraPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                                        if (hasCameraPermission) {
+                                            cameraLauncher.launch(null)
+                                        } else {
+                                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                        }
+                                    },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(Icons.Default.PhotoCamera, contentDescription = "Camera", tint = Color(0xFF6366F1), modifier = Modifier.size(20.dp))
+                                }
+                            }
+                        },
+                        trailingIcon = {
+                            IconButton(
+                                onClick = {
+                                    val hasMicPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                                    if (hasMicPermission) {
+                                        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                            putExtra(RecognizerIntent.EXTRA_LANGUAGE, if (selectedLanguage == "Hindi") "hi-IN" else "en-US")
+                                            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                                        }
+                                        try {
+                                            speechRecognizer?.startListening(intent)
+                                            isListening = true
+                                        } catch (e: Exception) {
+                                            e.printStackTrace()
+                                            Toast.makeText(context, "Voice error. Try again.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    } else {
+                                        micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    }
+                                },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(Icons.Default.Mic, contentDescription = "Voice Input", tint = Color(0xFF10B981), modifier = Modifier.size(20.dp))
+                            }
+                        },
                         maxLines = 3,
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = Color(0xFF6366F1),
@@ -243,9 +449,14 @@ fun AiDoubtSolverScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
                                             partsList.add(Part(inlineData = InlineData("image/jpeg", base64Img)))
                                         }
                                         
+                                        val systemPrompt = if (selectedLanguage == "Hindi") {
+                                            "You are an expert AI tutor for Lakshya Academy. Help the student with their academic doubt politely and accurately. You MUST explain the concept clearly and entirely in simple, easy-to-understand Hindi (using Hindi Devanagari script). Solve mathematical or logic problems step-by-step. Keep responses structured and clean. If an image is provided, analyze the question or diagram and help."
+                                        } else {
+                                            "You are an expert AI tutor for Lakshya Academy. Help the student with their academic doubt politely and accurately. You MUST explain the concept clearly and entirely in clean, easy-to-understand English. Solve mathematical or logic problems step-by-step. Keep responses structured and clean. If an image is provided, analyze the question or diagram and help."
+                                        }
                                         val req = GenerateContentRequest(
                                             contents = listOf(Content(parts = partsList)),
-                                            systemInstruction = Content(parts = listOf(Part(text = "You are an expert AI tutor for Lakshya Academy. Help the student with their academic doubt politely and accurately. Explain the concept clearly using a mix of Hindi and English. Solve mathematical or logic problems step-by-step. Keep responses structured and clean. If an image is provided, analyze the question or diagram and help.")))
+                                            systemInstruction = Content(parts = listOf(Part(text = systemPrompt)))
                                         )
                                         
                                         val res = RetrofitClient.service.generateContent(BuildConfig.MY_API_KEY, req)
@@ -344,6 +555,7 @@ fun AiDoubtSolverScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
                                     TextButton(
                                         onClick = {
                                             if (viewModel.incrementVideoQuota()) {
+                                                videoQuotaRemaining = viewModel.getVideoQuotaRemaining()
                                                 coroutineScope.launch {
                                                     isGeneratingVideo = true
                                                     videoProgress = 0f
@@ -363,7 +575,7 @@ fun AiDoubtSolverScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
                                     ) {
                                         Icon(Icons.Default.Psychology, null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Explain with Video (Left: ${viewModel.getVideoQuotaRemaining()})", fontSize = 12.sp)
+                                        Text("Explain with Video (Left: $videoQuotaRemaining)", fontSize = 12.sp)
                                     }
                                 }
                             }
@@ -412,10 +624,21 @@ fun AiDoubtSolverScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
                 val bar4 by infiniteTransition.animateFloat(initialValue = 0.6f, targetValue = 0.3f, animationSpec = infiniteRepeatable(tween(350, easing = LinearEasing), RepeatMode.Reverse))
 
                 var currentWordIndex by remember { mutableStateOf(0) }
-                val words = teacherVideoMessage!!.split(" ")
+                val cleanSpeechText = remember(teacherVideoMessage) {
+                    sanitizeTextForCleanSpeechAndSubtitles(teacherVideoMessage ?: "")
+                }
+                val words = remember(cleanSpeechText) { cleanSpeechText.split(" ") }
 
-                LaunchedEffect(teacherVideoMessage) {
-                    tts?.speak(teacherVideoMessage, TextToSpeech.QUEUE_FLUSH, null, "teacher_speech")
+                LaunchedEffect(teacherVideoMessage, selectedLanguage) {
+                    val currentTts = tts
+                    if (currentTts != null) {
+                        if (selectedLanguage == "Hindi") {
+                            currentTts.language = Locale("hi", "IN")
+                        } else {
+                            currentTts.language = Locale.US
+                        }
+                        currentTts.speak(cleanSpeechText, TextToSpeech.QUEUE_FLUSH, null, "teacher_speech")
+                    }
                     for(i in words.indices) {
                         delay(400) // approx word speed
                         currentWordIndex = i
@@ -500,4 +723,428 @@ fun AiDoubtSolverScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
             Spacer(modifier = Modifier.height(8.dp))
         }
     }
+
+    if (showCropDialog && uncroppedBitmap != null) {
+        ImageCropperDialog(
+            bitmap = uncroppedBitmap!!,
+            onCropSuccess = { cropped ->
+                selectedBitmap = cropped
+                showCropDialog = false
+                uncroppedBitmap = null
+            },
+            onDismiss = {
+                showCropDialog = false
+                uncroppedBitmap = null
+            }
+        )
+    }
+
+    if (isListening) {
+        Dialog(
+            onDismissRequest = {
+                try { speechRecognizer?.cancel() } catch (e: Exception) {}
+                isListening = false
+            },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            val infiniteTransition = rememberInfiniteTransition()
+            val pulseScale1 by infiniteTransition.animateFloat(
+                initialValue = 1f,
+                targetValue = 1.3f,
+                animationSpec = infiniteRepeatable(tween(1200, easing = FastOutSlowInEasing), RepeatMode.Reverse)
+            )
+            val pulseScale2 by infiniteTransition.animateFloat(
+                initialValue = 1f,
+                targetValue = 1.6f,
+                animationSpec = infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Reverse)
+            )
+            val rotationAngle by infiniteTransition.animateFloat(
+                initialValue = 0f,
+                targetValue = 360f,
+                animationSpec = infiniteRepeatable(tween(6000, easing = LinearEasing))
+            )
+
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = Color.Black.copy(alpha = 0.8f)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = if (selectedLanguage == "Hindi") "सुन रहा हूँ... प्रश्न पूछें" else "Listening... ask your doubt",
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = if (selectedLanguage == "Hindi") "कृपया स्पष्ट और ऊंची आवाज में बोलें" else "Please speak clearly",
+                        color = Color.LightGray,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Spacer(modifier = Modifier.height(48.dp))
+
+                    Box(
+                        modifier = Modifier.size(240.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val voiceGlowFactor = 1f + (currentVolumeDb / 15f)
+                        
+                        // Outermost aura
+                        Box(
+                            modifier = Modifier
+                                .size(180.dp)
+                                .graphicsLayer {
+                                    scaleX = pulseScale2 * voiceGlowFactor
+                                    scaleY = pulseScale2 * voiceGlowFactor
+                                    alpha = 0.15f
+                                }
+                                .background(Brush.radialGradient(listOf(Color(0xFF6366F1), Color.Transparent)), CircleShape)
+                        )
+
+                        // Middle aura
+                        Box(
+                            modifier = Modifier
+                                .size(130.dp)
+                                .graphicsLayer {
+                                    scaleX = pulseScale1 * voiceGlowFactor
+                                    scaleY = pulseScale1 * voiceGlowFactor
+                                    alpha = 0.35f
+                                }
+                                .background(Brush.radialGradient(listOf(Color(0xFF818CF8), Color.Transparent)), CircleShape)
+                        )
+
+                        // Swirling ring
+                        Canvas(
+                            modifier = Modifier
+                                .size(110.dp)
+                                .graphicsLayer {
+                                    rotationZ = rotationAngle
+                                }
+                        ) {
+                            drawCircle(
+                                brush = Brush.sweepGradient(
+                                    colors = listOf(
+                                        Color(0xFF6366F1),
+                                        Color(0xFF34D399),
+                                        Color(0xFF60A5FA),
+                                        Color(0xFF818CF8),
+                                        Color(0xFF6366F1)
+                                    )
+                                ),
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 4.dp.toPx()),
+                                radius = size.width / 2f
+                            )
+                        }
+
+                        // Mic icon
+                        Surface(
+                            modifier = Modifier.size(80.dp),
+                            shape = CircleShape,
+                            color = Color(0xFF6366F1),
+                            tonalElevation = 8.dp
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Mic,
+                                    contentDescription = "Mic Icon",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(36.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(48.dp))
+
+                    // Bouncing visualizer bars
+                    Row(
+                        modifier = Modifier
+                            .height(40.dp)
+                            .fillMaxWidth()
+                            .padding(horizontal = 48.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val numBars = 7
+                        for (i in 0 until numBars) {
+                            val barDelay = i * 100
+                            val barScale by infiniteTransition.animateFloat(
+                                initialValue = 0.15f,
+                                targetValue = 0.85f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(350, delayMillis = barDelay, easing = FastOutSlowInEasing),
+                                    repeatMode = RepeatMode.Reverse
+                                )
+                            )
+                            val adjustedHeight = (12.dp + (currentVolumeDb * 2f).dp) * barScale
+                            Box(
+                                modifier = Modifier
+                                    .padding(horizontal = 4.dp)
+                                    .width(5.dp)
+                                    .height(adjustedHeight)
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(
+                                        brush = Brush.verticalGradient(
+                                            listOf(Color(0xFF34D399), Color(0xFF6366F1))
+                                        )
+                                    )
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(48.dp))
+
+                    Button(
+                        onClick = {
+                            try { speechRecognizer?.stopListening() } catch (e: Exception) {}
+                            isListening = false
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f)),
+                        shape = RoundedCornerShape(24.dp)
+                    ) {
+                        Icon(Icons.Default.Stop, contentDescription = "Stop", tint = Color.White)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Stop", color = Color.White)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ImageCropperDialog(
+    bitmap: Bitmap,
+    onCropSuccess: (Bitmap) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var cropLeft by remember { mutableFloatStateOf(0.1f) }
+    var cropTop by remember { mutableFloatStateOf(0.1f) }
+    var cropRight by remember { mutableFloatStateOf(0.9f) }
+    var cropBottom by remember { mutableFloatStateOf(0.9f) }
+
+    var activeHandle by remember { mutableStateOf<String?>(null) }
+    val imageAspectRatio = remember(bitmap) { bitmap.width.toFloat() / bitmap.height.toFloat() }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = Color.Black
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Crop Photo",
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(imageAspectRatio)
+                            .pointerInput(cropLeft, cropTop, cropRight, cropBottom) {
+                                detectDragGestures(
+                                    onDragStart = { offset ->
+                                        val touchX = offset.x / size.width
+                                        val touchY = offset.y / size.height
+                                        val distTL = Math.hypot((touchX - cropLeft).toDouble(), (touchY - cropTop).toDouble())
+                                        val distTR = Math.hypot((touchX - cropRight).toDouble(), (touchY - cropTop).toDouble())
+                                        val distBL = Math.hypot((touchX - cropLeft).toDouble(), (touchY - cropBottom).toDouble())
+                                        val distBR = Math.hypot((touchX - cropRight).toDouble(), (touchY - cropBottom).toDouble())
+                                        val threshold = 0.08f
+                                        activeHandle = when {
+                                            distTL < threshold -> "TL"
+                                            distTR < threshold -> "TR"
+                                            distBL < threshold -> "BL"
+                                            distBR < threshold -> "BR"
+                                            touchX in cropLeft..cropRight && touchY in cropTop..cropBottom -> "CENTER"
+                                            else -> null
+                                        }
+                                    },
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        val dx = dragAmount.x / size.width
+                                        val dy = dragAmount.y / size.height
+                                        when (activeHandle) {
+                                            "TL" -> {
+                                                cropLeft = (cropLeft + dx).coerceIn(0f, cropRight - 0.15f)
+                                                cropTop = (cropTop + dy).coerceIn(0f, cropBottom - 0.15f)
+                                            }
+                                            "TR" -> {
+                                                cropRight = (cropRight + dx).coerceIn(cropLeft + 0.15f, 1f)
+                                                cropTop = (cropTop + dy).coerceIn(0f, cropBottom - 0.15f)
+                                            }
+                                            "BL" -> {
+                                                cropLeft = (cropLeft + dx).coerceIn(0f, cropRight - 0.15f)
+                                                cropBottom = (cropBottom + dy).coerceIn(cropTop + 0.15f, 1f)
+                                            }
+                                            "BR" -> {
+                                                cropRight = (cropRight + dx).coerceIn(cropLeft + 0.15f, 1f)
+                                                cropBottom = (cropBottom + dy).coerceIn(cropTop + 0.15f, 1f)
+                                            }
+                                            "CENTER" -> {
+                                                val w = cropRight - cropLeft
+                                                val h = cropBottom - cropTop
+                                                var newLeft = cropLeft + dx
+                                                var newTop = cropTop + dy
+                                                if (newLeft < 0f) newLeft = 0f
+                                                if (newLeft + w > 1f) newLeft = 1f - w
+                                                if (newTop < 0f) newTop = 0f
+                                                if (newTop + h > 1f) newTop = 1f - h
+                                                cropLeft = newLeft
+                                                cropRight = newLeft + w
+                                                cropTop = newTop
+                                                cropBottom = newTop + h
+                                            }
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        activeHandle = null
+                                    }
+                                )
+                            }
+                    ) {
+                        Image(
+                            bitmap = bitmap.asImageBitmap(),
+                            contentDescription = "Uncropped Image",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.FillBounds
+                        )
+
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val w = size.width
+                            val h = size.height
+
+                            val leftPx = cropLeft * w
+                            val topPx = cropTop * h
+                            val rightPx = cropRight * w
+                            val bottomPx = cropBottom * h
+
+                            drawRect(color = Color.Black.copy(alpha = 0.6f), topLeft = androidx.compose.ui.geometry.Offset(0f, 0f), size = androidx.compose.ui.geometry.Size(w, topPx))
+                            drawRect(color = Color.Black.copy(alpha = 0.6f), topLeft = androidx.compose.ui.geometry.Offset(0f, bottomPx), size = androidx.compose.ui.geometry.Size(w, h - bottomPx))
+                            drawRect(color = Color.Black.copy(alpha = 0.6f), topLeft = androidx.compose.ui.geometry.Offset(0f, topPx), size = androidx.compose.ui.geometry.Size(leftPx, bottomPx - topPx))
+                            drawRect(color = Color.Black.copy(alpha = 0.6f), topLeft = androidx.compose.ui.geometry.Offset(rightPx, topPx), size = androidx.compose.ui.geometry.Size(w - rightPx, bottomPx - topPx))
+
+                            drawRect(
+                                color = Color.White,
+                                topLeft = androidx.compose.ui.geometry.Offset(leftPx, topPx),
+                                size = androidx.compose.ui.geometry.Size(rightPx - leftPx, bottomPx - topPx),
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx())
+                            )
+
+                            val handleRadius = 10.dp.toPx()
+                            drawCircle(color = Color(0xFF6366F1), radius = handleRadius, center = androidx.compose.ui.geometry.Offset(leftPx, topPx))
+                            drawCircle(color = Color(0xFF6366F1), radius = handleRadius, center = androidx.compose.ui.geometry.Offset(rightPx, topPx))
+                            drawCircle(color = Color(0xFF6366F1), radius = handleRadius, center = androidx.compose.ui.geometry.Offset(leftPx, bottomPx))
+                            drawCircle(color = Color(0xFF6366F1), radius = handleRadius, center = androidx.compose.ui.geometry.Offset(rightPx, bottomPx))
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                    ) {
+                        Text("Cancel")
+                    }
+
+                    Button(
+                        onClick = {
+                            val x = (cropLeft * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
+                            val y = (cropTop * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
+                            var width = ((cropRight - cropLeft) * bitmap.width).toInt()
+                            var height = ((cropBottom - cropTop) * bitmap.height).toInt()
+
+                            if (width <= 0) width = 1
+                            if (height <= 0) height = 1
+
+                            val finalWidth = if (x + width > bitmap.width) bitmap.width - x else width
+                            val finalHeight = if (y + height > bitmap.height) bitmap.height - y else height
+
+                            try {
+                                val cropped = Bitmap.createBitmap(bitmap, x, y, finalWidth, finalHeight)
+                                if (cropped != null) {
+                                    onCropSuccess(cropped)
+                                } else {
+                                    onDismiss()
+                                }
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                                onDismiss()
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1))
+                    ) {
+                        Text("Save Crop", color = Color.White)
+                    }
+                }
+            }
+        }
+    }
+}
+
+fun sanitizeTextForCleanSpeechAndSubtitles(text: String): String {
+    var cleaned = text
+        .replace("**", "")
+        .replace("*", "")
+        .replace("##", "")
+        .replace("#", "")
+        .replace("__", "")
+        .replace("_", "")
+        .replace("`", "")
+        .replace("[", "")
+        .replace("]", "")
+        .replace("(", "")
+        .replace(")", "")
+        .replace("{", "")
+        .replace("}", "")
+        .replace("/", " ")
+        .replace("\\", " ")
+        .replace("•", " ")
+        .replace("-", " ")
+        .replace("+", " ")
+        .replace("=", " ")
+        .replace("~", " ")
+    
+    // Replace multiple spaces with a single space
+    return cleaned.replace(Regex("\\s+"), " ").trim()
 }

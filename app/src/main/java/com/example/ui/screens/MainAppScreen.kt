@@ -270,10 +270,38 @@ fun StudentLessonsMediaWorkspace(course: CourseEntity, completedCount: Int, view
 
     LaunchedEffect(course.id) { viewModel.selectCourse(course) }
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
+    ) {
         var isFullScreen by remember { mutableStateOf(false) }
+
+        val dialogWindow = (androidx.compose.ui.platform.LocalView.current.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
+        LaunchedEffect(isFullScreen) {
+            dialogWindow?.let { window ->
+                window.setLayout(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                val controller = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+                if (isFullScreen) {
+                    window.setDimAmount(0f)
+                    androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+                    controller.hide(androidx.core.view.WindowInsetsCompat.Type.statusBars() or androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+                    controller.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                } else {
+                    window.setDimAmount(0.5f)
+                    androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, true)
+                    controller.show(androidx.core.view.WindowInsetsCompat.Type.statusBars() or androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+                }
+            }
+        }
         
         Scaffold(
+            contentWindowInsets = if (isFullScreen) WindowInsets(0.dp) else ScaffoldDefaults.contentWindowInsets,
             topBar = {
                 if (!isFullScreen) {
                     TopAppBar(
