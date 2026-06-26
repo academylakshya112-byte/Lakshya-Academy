@@ -40,6 +40,18 @@ import com.example.ui.theme.*
 import com.example.ui.viewmodel.AcademyViewModel
 import kotlinx.coroutines.delay
 
+fun formatQuestionOrOptionText(text: String, language: String): String {
+    if (!text.contains(" / ")) {
+        return text
+    }
+    val parts = text.split(" / ", limit = 2)
+    return when (language) {
+        "ENG" -> parts[0].trim()
+        "HIN" -> parts.getOrNull(1)?.trim() ?: parts[0].trim()
+        else -> text
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainAppScreen(
@@ -494,6 +506,7 @@ fun StudentTestHubMain(viewModel: AcademyViewModel) {
 fun ActiveTestScreen(viewModel: AcademyViewModel) {
     val progress = viewModel.activeTestProgress ?: return
     val currentQuestion = progress.questions.getOrNull(progress.currentQuestionIndex)
+    var testLanguage by remember { mutableStateOf("BOTH") } // "ENG", "HIN", "BOTH"
     
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
@@ -517,12 +530,43 @@ fun ActiveTestScreen(viewModel: AcademyViewModel) {
             modifier = Modifier.fillMaxWidth(),
             color = Color(0xFF6366F1)
         )
+
+        // Language toggle row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .background(Color(0xFFF3F4F6), RoundedCornerShape(8.dp))
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            val languages = listOf("BOTH" to "दोनों (Eng & हिन्दी)", "ENG" to "English", "HIN" to "हिन्दी")
+            languages.forEach { (langCode, label) ->
+                val isSelected = testLanguage == langCode
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (isSelected) Color(0xFF6366F1) else Color.Transparent)
+                        .clickable { testLanguage = langCode }
+                        .padding(vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = label,
+                        color = if (isSelected) Color.White else Color.DarkGray,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
         
         if (currentQuestion != null) {
             Column(modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
                 Text("Question ${progress.currentQuestionIndex + 1} of ${progress.questions.size}", color = Color.Gray, fontSize = 12.sp)
                 Spacer(modifier = Modifier.height(8.dp))
-                Text(currentQuestion.questionText, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+                Text(formatQuestionOrOptionText(currentQuestion.questionText, testLanguage), fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
                 Spacer(modifier = Modifier.height(24.dp))
                 
                 val options = listOf(currentQuestion.optionA, currentQuestion.optionB, currentQuestion.optionC, currentQuestion.optionD)
@@ -538,7 +582,7 @@ fun ActiveTestScreen(viewModel: AcademyViewModel) {
                         Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                             RadioButton(selected = isSelected, onClick = null, colors = RadioButtonDefaults.colors(selectedColor=Color(0xFF6366F1)))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(optionText)
+                            Text(formatQuestionOrOptionText(optionText, testLanguage))
                         }
                     }
                 }
@@ -570,6 +614,7 @@ fun ActiveTestScreen(viewModel: AcademyViewModel) {
 fun TestResultScreen(viewModel: AcademyViewModel) {
     val progress = viewModel.activeTestProgress ?: return
     val score = progress.testScore ?: return // Must have score to view result
+    var testLanguage by remember { mutableStateOf("BOTH") } // "ENG", "HIN", "BOTH"
     
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(title = { Text("Performance Report") }, navigationIcon = { IconButton(onClick = { viewModel.exitTest() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } })
@@ -583,6 +628,38 @@ fun TestResultScreen(viewModel: AcademyViewModel) {
                 }
             }
             Spacer(modifier = Modifier.height(24.dp))
+
+            // Language toggle row for review
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFF3F4F6), RoundedCornerShape(8.dp))
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                val languages = listOf("BOTH" to "दोनों (Eng & हिन्दी)", "ENG" to "English", "HIN" to "हिन्दी")
+                languages.forEach { (langCode, label) ->
+                    val isSelected = testLanguage == langCode
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isSelected) Color(0xFF6366F1) else Color.Transparent)
+                            .clickable { testLanguage = langCode }
+                            .padding(vertical = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = label,
+                            color = if (isSelected) Color.White else Color.DarkGray,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
             Text("Detailed Question Review:", fontWeight = FontWeight.Bold, fontSize = 18.sp)
             Spacer(modifier = Modifier.height(16.dp))
             
@@ -592,7 +669,7 @@ fun TestResultScreen(viewModel: AcademyViewModel) {
                 
                 Card(modifier = Modifier.fillMaxWidth().padding(vertical=4.dp), colors = CardDefaults.cardColors(containerColor = Color.White), border = BorderStroke(1.dp, Color.LightGray)) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Q${i+1}. ${q.questionText}", fontWeight=FontWeight.SemiBold)
+                        Text("Q${i+1}. ${formatQuestionOrOptionText(q.questionText, testLanguage)}", fontWeight=FontWeight.SemiBold)
                         Spacer(modifier = Modifier.height(8.dp))
                         
                         val ops = listOf(q.optionA, q.optionB, q.optionC, q.optionD)
@@ -604,30 +681,30 @@ fun TestResultScreen(viewModel: AcademyViewModel) {
                                 isCorrectAnswer -> Color(0xFFD1FAE5) // Green background for the actual correct answer
                                 isUserSelected && !isCorrectAnswer -> Color(0xFFFEE2E2) // Red background if user selected wrong
                                 else -> Color.Transparent
-                            }
+                             }
                             
-                            Row(modifier = Modifier.fillMaxWidth().background(bgColor, RoundedCornerShape(4.dp)).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                val ic = when {
-                                    isCorrectAnswer -> Icons.Default.CheckCircle
-                                    isUserSelected -> Icons.Default.Cancel
-                                    else -> Icons.Default.RadioButtonUnchecked
-                                }
-                                val cColor = when {
-                                    isCorrectAnswer -> Color(0xFF10B981)
-                                    isUserSelected -> Color.Red
-                                    else -> Color.Gray
-                                }
-                                Icon(ic, null, modifier = Modifier.size(16.dp), tint = cColor)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(opTxt, color = if(isCorrectAnswer || isUserSelected) Color.Black else Color.Gray)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+                             Row(modifier = Modifier.fillMaxWidth().background(bgColor, RoundedCornerShape(4.dp)).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                 val ic = when {
+                                     isCorrectAnswer -> Icons.Default.CheckCircle
+                                     isUserSelected -> Icons.Default.Cancel
+                                     else -> Icons.Default.RadioButtonUnchecked
+                                 }
+                                 val cColor = when {
+                                     isCorrectAnswer -> Color(0xFF10B981)
+                                     isUserSelected -> Color.Red
+                                     else -> Color.Gray
+                                 }
+                                 Icon(ic, null, modifier = Modifier.size(16.dp), tint = cColor)
+                                 Spacer(modifier = Modifier.width(8.dp))
+                                 Text(formatQuestionOrOptionText(opTxt, testLanguage), color = if(isCorrectAnswer || isUserSelected) Color.Black else Color.Gray)
+                             }
+                         }
+                     }
+                 }
+             }
+         }
+     }
+ }
 
 @Composable
 fun StudentProfileView(viewModel: AcademyViewModel) {

@@ -1,6 +1,6 @@
 {
-  "name": "Lakshya Academy Ghazipur",
-  "description": "Lakshya Academy Ghazipur is a professional Android Learning App offering modern blue branding, visual dashboards, local sandbox administration, and premium learning tools.",
+  "name": "Lakshya AI Desk",
+  "description": "Lakshya AI Desk is an advanced AI-powered doubt solver utilizing Gemini Live technology for instant academic assistance.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

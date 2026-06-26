@@ -45,3 +45,25 @@ fun getFileSizeFromUri(context: Context, uri: Uri): String {
     val mb = kb / 1024.0
     return if (mb > 1.0) String.format("%.2f MB", mb) else String.format("%.2f KB", kb)
 }
+
+fun sanitizeVideoUrl(url: String): String {
+    val trimmed = url.trim()
+    
+    // Handle Google Drive Links
+    if (trimmed.contains("drive.google.com")) {
+        val fileId = if (trimmed.contains("id=")) {
+            trimmed.substringAfter("id=").substringBefore("&")
+        } else if (trimmed.contains("/d/")) {
+            trimmed.substringAfter("/d/").substringBefore("/")
+        } else {
+            null
+        }
+        
+        if (fileId != null) {
+            // Direct download link often works for ExoPlayer if the file is public
+            return "https://drive.google.com/uc?export=download&id=$fileId"
+        }
+    }
+    
+    return trimmed
+}

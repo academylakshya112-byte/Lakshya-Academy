@@ -58,6 +58,10 @@ class AcademyRepository(private val academyDao: AcademyDao) {
         academyDao.deleteTestById(id)
     }
 
+    suspend fun deleteAllTests() {
+        academyDao.deleteAllTests()
+    }
+
     // === Questions ===
     fun getQuestionsForTest(testId: Int): Flow<List<QuestionEntity>> {
         return academyDao.getQuestionsForTest(testId)
@@ -69,6 +73,10 @@ class AcademyRepository(private val academyDao: AcademyDao) {
 
     suspend fun deleteQuestion(id: Int) {
         academyDao.deleteQuestionById(id)
+    }
+
+    suspend fun deleteAllQuestions() {
+        academyDao.deleteAllQuestions()
     }
 
     // === Test Scores ===
@@ -141,4 +149,8 @@ class AcademyRepository(private val academyDao: AcademyDao) {
     suspend fun deleteLiveClass(id: Int) {
         academyDao.deleteLiveClassById(id)
     }
+
+    // === AI Animation Limits ===
+    suspend fun getAnimationLimit(email: String) = academyDao.getAnimationLimit(email)
+    suspend fun insertAnimationLimit(limit: AiAnimationLimitEntity) = academyDao.insertAnimationLimit(limit)
 }

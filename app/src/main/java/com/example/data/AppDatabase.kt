@@ -52,6 +52,9 @@ interface AcademyDao {
     @Query("DELETE FROM tests WHERE id = :id")
     suspend fun deleteTestById(id: Int)
 
+    @Query("DELETE FROM tests")
+    suspend fun deleteAllTests()
+
     // === Questions ===
     @Query("SELECT * FROM questions WHERE testId = :testId ORDER BY id ASC")
     fun getQuestionsForTest(testId: Int): Flow<List<QuestionEntity>>
@@ -61,6 +64,9 @@ interface AcademyDao {
 
     @Query("DELETE FROM questions WHERE id = :id")
     suspend fun deleteQuestionById(id: Int)
+
+    @Query("DELETE FROM questions")
+    suspend fun deleteAllQuestions()
 
     // === Test Scores ===
     @Query("SELECT * FROM test_scores ORDER BY timestamp DESC")
@@ -125,6 +131,20 @@ interface AcademyDao {
 
     @Query("DELETE FROM live_classes WHERE id = :id")
     suspend fun deleteLiveClassById(id: Int)
+
+    // === AI Animation Limits ===
+    @Query("SELECT * FROM ai_animation_limits WHERE userEmail = :email")
+    suspend fun getAnimationLimit(email: String): AiAnimationLimitEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAnimationLimit(limit: AiAnimationLimitEntity)
+
+    // === AI Video Limits ===
+    @Query("SELECT * FROM ai_video_limits WHERE userEmail = :email")
+    suspend fun getVideoLimit(email: String): AiVideoLimitEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertVideoLimit(limit: AiVideoLimitEntity)
 }
 
 @Database(
@@ -140,9 +160,11 @@ interface AcademyDao {
         NotificationEntity::class,
         MaterialEntity::class,
         BannerEntity::class,
-        LiveClassEntity::class
+        LiveClassEntity::class,
+        AiAnimationLimitEntity::class,
+        AiVideoLimitEntity::class
     ],
-    version = 7,
+    version = 9,
     exportSchema = false
 )
 abstract class AcademyDatabase : RoomDatabase() {

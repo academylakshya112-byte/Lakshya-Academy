@@ -1,9 +1,13 @@
 package com.example.ui.screens
 
+import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.Environment
 import android.os.ParcelFileDescriptor
+import android.provider.MediaStore
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -14,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,6 +36,56 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.InputStream
+import java.io.OutputStream
+
+fun downloadPdfFromUri(context: android.content.Context, pdfUriString: String, pdfName: String) {
+    try {
+        val uri = Uri.parse(pdfUriString)
+        val contentResolver = context.contentResolver
+        val inputStream: InputStream? = contentResolver.openInputStream(uri)
+        if (inputStream == null) {
+            Toast.makeText(context, "Cannot open PDF file source", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val sanitizedName = pdfName.replace("[\\\\/:*?\"<>|]".toRegex(), "_")
+        val fileName = if (sanitizedName.endsWith(".pdf", ignoreCase = true)) sanitizedName else "$sanitizedName.pdf"
+
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+            put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            }
+        }
+
+        val downloadUri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+        if (downloadUri == null) {
+            Toast.makeText(context, "Failed to create Download file reference", Toast.LENGTH_SHORT).show()
+            inputStream.close()
+            return
+        }
+
+        val outputStream: OutputStream? = contentResolver.openOutputStream(downloadUri)
+        if (outputStream == null) {
+            Toast.makeText(context, "Failed to open Download location output stream", Toast.LENGTH_SHORT).show()
+            inputStream.close()
+            return
+        }
+
+        inputStream.use { input ->
+            outputStream.use { output ->
+                input.copyTo(output)
+            }
+        }
+
+        Toast.makeText(context, "PDF downloaded successfully: $fileName", Toast.LENGTH_LONG).show()
+    } catch (e: Exception) {
+        e.printStackTrace()
+        Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
+    }
+}
 
 @Composable
 fun NativePdfViewerScreen(
@@ -116,6 +171,15 @@ fun NativePdfViewerScreen(
                         if (fileSize.isNotBlank()) {
                             Text(fileSize, fontSize = 11.sp, color = Color.Gray)
                         }
+                    }
+                    IconButton(onClick = {
+                        downloadPdfFromUri(context, pdfUri, pdfName)
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowDownward,
+                            contentDescription = "Download PDF",
+                            tint = Color(0xFF6366F1)
+                        )
                     }
                 }
                 HorizontalDivider()

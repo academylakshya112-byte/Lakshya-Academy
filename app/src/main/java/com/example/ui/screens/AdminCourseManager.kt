@@ -127,51 +127,29 @@ fun AdminCourseManager(viewModel: AcademyViewModel) {
         item {
             Text("Course & Batch Management", fontWeight = FontWeight.ExtraBold, fontSize = 20.sp, color = Color(0xFF1E293B))
             Spacer(modifier = Modifier.height(16.dp))
-            
-            // AI TOOLS SECTION
+
+            // SHARING TIP SECTION
             Card(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFF3F4FF)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF7ED)),
                 elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                border = BorderStroke(1.dp, Color(0xFFFFEDD5)),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color(0xFF6366F1))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("AI Exam Tools (AI मॉक टेस्ट जनरेटर)", fontWeight = FontWeight.Bold, color = Color(0xFF6366F1))
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    var aiExamInput by remember { mutableStateOf("") }
-                    var aiQuestionCount by remember { mutableStateOf("50") }
-                    val aiStatus = viewModel.aiProcessingStatus
-                    
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = aiExamInput,
-                            onValueChange = { aiExamInput = it },
-                            label = { Text("Exam Name (e.g. UPSC Prelims, UP Police)") },
-                            modifier = Modifier.weight(1f),
-                            enabled = aiStatus == null
+                Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFD97706))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text("Sharing Tip (जरूरी सूचना)", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF9A3412))
+                        Text(
+                            "Use Web Links (YouTube/Drive) to make videos visible to all students. Local files work only on your device.",
+                            fontSize = 11.sp,
+                            color = Color(0xFF9A3412).copy(alpha = 0.8f)
                         )
-                        OutlinedTextField(
-                            value = aiQuestionCount,
-                            onValueChange = { aiQuestionCount = it },
-                            label = { Text("Questions") },
-                            modifier = Modifier.width(100.dp),
-                            enabled = aiStatus == null
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    if (aiStatus != null) {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Color(0xFF6366F1))
-                        Text(aiStatus, fontSize = 12.sp, color = Color.Gray, modifier = Modifier.padding(top = 4.dp))
-                    } else {
-                        // Mock test generation moved to new module.
                     }
                 }
             }
-
+            
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -401,21 +379,46 @@ fun AdminCourseManager(viewModel: AcademyViewModel) {
                                 
                                 // VIDEO UPLOADER
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.VideoLibrary, contentDescription = null, tint = Color.Red)
+                                    Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color(0xFF6366F1))
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Video Source (MP4 / Web Link)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text("Video Source (Web Link is Recommended)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                 }
+                                
+                                Text(
+                                    "Note: If you use a web link (YouTube/Drive), all students can see the video. Local files only work on your device.",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF6366F1),
+                                    modifier = Modifier.padding(vertical = 4.dp)
+                                )
+
+                                OutlinedTextField(
+                                    value = videoLinkInput,
+                                    onValueChange = { videoLinkInput = it },
+                                    label = { Text("Web Video URL (YouTube, Drive, or direct MP4)") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    placeholder = { Text("https://...") },
+                                    leadingIcon = { Icon(Icons.Default.Link, contentDescription = null) }
+                                )
+
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                                    HorizontalDivider(modifier = Modifier.weight(1f))
+                                    Text(" OR ", fontSize = 10.sp, color = Color.Gray, modifier = Modifier.padding(horizontal = 8.dp))
+                                    HorizontalDivider(modifier = Modifier.weight(1f))
+                                }
+
                                 Button(
                                     onClick = { videoPicker.launch(arrayOf("video/*")) },
-                                    colors = ButtonDefaults.buttonColors(containerColor = if (selectedVideoUri != null) Color(0xFF10B981) else Color(0xFF334155)),
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                    colors = ButtonDefaults.buttonColors(containerColor = if (selectedVideoUri != null) Color(0xFF10B981) else Color(0xFF94A3B8)),
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    shape = RoundedCornerShape(8.dp)
                                 ) {
-                                    Text(if (selectedVideoUri != null) "Video File Attached 🎥" else "Pick Video from Phone Storage")
+                                    Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(if (selectedVideoUri != null) "Local File Selected" else "Pick Video from Phone Storage")
                                 }
                                 if (selectedVideoName.isNotBlank()) {
-                                    Text("Attached: $selectedVideoName", fontSize = 11.sp, color = Color.Gray)
+                                    Text("File: $selectedVideoName (Local only)", fontSize = 10.sp, color = Color.Red.copy(alpha = 0.7f))
                                 }
-                                OutlinedTextField(value = videoLinkInput, onValueChange = { videoLinkInput = it }, label = { Text("Manual Video URL (YouTube/Drive/Direct Link)") }, modifier = Modifier.fillMaxWidth())
 
                                 Spacer(modifier = Modifier.height(16.dp))
 
@@ -482,7 +485,7 @@ fun AdminCourseManager(viewModel: AcademyViewModel) {
                                                 chapter = chapName,
                                                 folder = folderName,
                                                 title = lessonTitle,
-                                                videoLink = videoLinkInput,
+                                                videoLink = sanitizeVideoUrl(videoLinkInput),
                                                 pdfLink = if (selectedPdfUri != null) selectedPdfUri.toString() else (if (pdfNameInput.isNotBlank()) "${pdfNameInput.trim()}.pdf" else "Class_Handout.pdf"),
                                                 pdfName = if (pdfNameInput.isNotBlank()) pdfNameInput.trim() else "Study notes compilation",
                                                 pdfContent = if (pdfContentInput.isNotBlank()) pdfContentInput.trim() else (if (selectedPdfName.isNotBlank()) "Loaded Local PDF Notes: $selectedPdfName" else ""),

@@ -1,5 +1,13 @@
 package com.example.ui.screens
 
+import android.content.ContentValues
+import android.graphics.Paint
+import android.graphics.Color as AndroidColor
+import android.graphics.pdf.PdfDocument
+import android.os.Environment
+import android.provider.MediaStore
+import android.widget.Toast
+import java.io.OutputStream
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -96,6 +104,122 @@ fun Academic3x3GridDashboard(onTabSelect: (String) -> Unit) {
     }
 }
 
+fun generateAndDownloadPdfFromText(context: android.content.Context, pdfName: String, pages: List<String>) {
+    try {
+        val pdfDocument = PdfDocument()
+        
+        val paint = Paint().apply {
+            textSize = 14f
+            color = AndroidColor.BLACK
+            isAntiAlias = true
+        }
+        
+        val titlePaint = Paint().apply {
+            textSize = 18f
+            color = AndroidColor.BLACK
+            isFakeBoldText = true
+            isAntiAlias = true
+        }
+
+        val pageWidth = 595
+        val pageHeight = 842
+
+        for (i in pages.indices) {
+            val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, i + 1).create()
+            val page = pdfDocument.startPage(pageInfo)
+            val canvas = page.canvas
+
+            canvas.drawColor(AndroidColor.WHITE)
+
+            var yOffset = 50f
+            
+            if (i == 0) {
+                canvas.drawText(pdfName, 40f, yOffset, titlePaint)
+                yOffset += 40f
+                canvas.drawLine(40f, yOffset - 15f, (pageWidth - 40).toFloat(), yOffset - 15f, Paint().apply { 
+                    strokeWidth = 1f
+                    color = AndroidColor.GRAY
+                })
+            }
+
+            val text = pages[i]
+            val lines = text.split("\n")
+            for (line in lines) {
+                val words = line.split(" ")
+                var currentLine = StringBuilder()
+                for (word in words) {
+                    val testString = currentLine.toString() + (if (currentLine.isEmpty()) "" else " ") + word
+                    val width = paint.measureText(testString)
+                    if (width < (pageWidth - 80)) {
+                        currentLine.append(if (currentLine.isEmpty()) "" else " ").append(word)
+                    } else {
+                        canvas.drawText(currentLine.toString(), 40f, yOffset, paint)
+                        yOffset += 24f
+                        currentLine = StringBuilder(word)
+                        if (yOffset > pageHeight - 60) {
+                            break
+                        }
+                    }
+                }
+                if (currentLine.isNotEmpty() && yOffset <= pageHeight - 60) {
+                    canvas.drawText(currentLine.toString(), 40f, yOffset, paint)
+                    yOffset += 24f
+                }
+                
+                if (yOffset > pageHeight - 60) {
+                    break
+                }
+            }
+            
+            val pageNumStr = "Page ${i + 1} of ${pages.size}"
+            val pageNumPaint = Paint().apply {
+                textSize = 10f
+                color = AndroidColor.GRAY
+                isAntiAlias = true
+            }
+            canvas.drawText(pageNumStr, (pageWidth - 40 - pageNumPaint.measureText(pageNumStr)), (pageHeight - 30).toFloat(), pageNumPaint)
+
+            pdfDocument.finishPage(page)
+        }
+
+        val sanitizedName = pdfName.replace("[\\\\/:*?\"<>|]".toRegex(), "_")
+        val fileName = if (sanitizedName.endsWith(".pdf", ignoreCase = true)) sanitizedName else "$sanitizedName.pdf"
+
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+            put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            }
+        }
+
+        val contentResolver = context.contentResolver
+        val downloadUri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+        if (downloadUri == null) {
+            Toast.makeText(context, "Failed to create Download file reference", Toast.LENGTH_SHORT).show()
+            pdfDocument.close()
+            return
+        }
+
+        val outputStream: OutputStream? = contentResolver.openOutputStream(downloadUri)
+        if (outputStream == null) {
+            Toast.makeText(context, "Failed to open output stream", Toast.LENGTH_SHORT).show()
+            pdfDocument.close()
+            return
+        }
+
+        outputStream.use { out ->
+            pdfDocument.writeTo(out)
+        }
+        pdfDocument.close()
+
+        Toast.makeText(context, "PDF generated & downloaded: $fileName", Toast.LENGTH_LONG).show()
+    } catch (e: Exception) {
+        e.printStackTrace()
+        Toast.makeText(context, "Generation/Download failed: ${e.message}", Toast.LENGTH_LONG).show()
+    }
+}
+
 @Composable
 fun MockPdfViewerScreen(
     pdfName: String,
@@ -183,11 +307,24 @@ fun MockPdfViewerScreen(
                     .statusBarsPadding()
                     .padding(16.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = null) }
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(pdfName, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         Text(fileSize, fontSize = 11.sp, color = Color.Gray)
+                    }
+                    val context = androidx.compose.ui.platform.LocalContext.current
+                    IconButton(onClick = {
+                        generateAndDownloadPdfFromText(context, pdfName, pages)
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowDownward,
+                            contentDescription = "Download PDF",
+                            tint = Color(0xFF6366F1)
+                        )
                     }
                 }
                 Spacer(modifier = Modifier.height(16.dp))

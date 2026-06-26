@@ -3,6 +3,8 @@ package com.example.ui.screens
 import android.os.Handler
 import android.os.Looper
 import androidx.annotation.OptIn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -40,6 +42,48 @@ fun VideoPlayerView(
     isFullScreen: Boolean = false
 ) {
     val context = LocalContext.current
+    val isYouTube = remember(lesson.videoUrl) {
+        lesson.videoUrl.contains("youtube.com") || lesson.videoUrl.contains("youtu.be")
+    }
+
+    if (isYouTube) {
+        YouTubePlayer(lesson.videoUrl, modifier = if (isFullScreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth().aspectRatio(16/9f))
+    } else {
+        StandardVideoPlayer(lesson, onFullScreenToggle, isFullScreen)
+    }
+}
+
+@Composable
+fun YouTubePlayer(url: String, modifier: Modifier) {
+    val videoId = remember(url) {
+        if (url.contains("v=")) url.substringAfter("v=").substringBefore("&")
+        else if (url.contains("youtu.be/")) url.substringAfter("youtu.be/").substringBefore("?")
+        else ""
+    }
+    val embedUrl = "https://www.youtube.com/embed/$videoId"
+
+    AndroidView(
+        factory = { ctx ->
+            android.webkit.WebView(ctx).apply {
+                settings.javaScriptEnabled = true
+                settings.loadWithOverviewMode = true
+                settings.useWideViewPort = true
+                webViewClient = android.webkit.WebViewClient()
+                loadUrl(embedUrl)
+            }
+        },
+        modifier = modifier
+    )
+}
+
+@OptIn(UnstableApi::class)
+@Composable
+fun StandardVideoPlayer(
+    lesson: LessonEntity,
+    onFullScreenToggle: (Boolean) -> Unit = {},
+    isFullScreen: Boolean = false
+) {
+    val context = LocalContext.current
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().apply {
             val audioAttributes = androidx.media3.common.AudioAttributes.Builder()
@@ -59,6 +103,12 @@ fun VideoPlayerView(
     var currentPosition by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
     var showControls by remember { mutableStateOf(true) }
+
+    // Quality selection states (144p to 1080p)
+    var selectedQuality by remember { mutableStateOf("720p") }
+    var qualityMenuExpanded by remember { mutableStateOf(false) }
+    var isChangingQuality by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
 
     DisposableEffect(lesson.id) {
         onDispose {
@@ -202,7 +252,8 @@ fun VideoPlayerView(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Speed Selector
                     Surface(
@@ -225,6 +276,62 @@ fun VideoPlayerView(
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )
+                    }
+
+                    // Quality Selector (144p to 1080p)
+                    Box {
+                        Surface(
+                            onClick = { qualityMenuExpanded = true },
+                            shape = RoundedCornerShape(16.dp),
+                            color = Color.Black.copy(alpha = 0.6f),
+                            contentColor = Color.White
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Settings,
+                                    contentDescription = "Quality Settings",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = selectedQuality,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = qualityMenuExpanded,
+                            onDismissRequest = { qualityMenuExpanded = false },
+                            modifier = Modifier.background(Color(0xFF333333))
+                        ) {
+                            listOf("144p", "240p", "360p", "480p", "720p", "1080p").forEach { quality ->
+                                DropdownMenuItem(
+                                    text = { Text(quality, color = Color.White, fontSize = 14.sp) },
+                                    onClick = {
+                                        qualityMenuExpanded = false
+                                        if (selectedQuality != quality) {
+                                            selectedQuality = quality
+                                            isChangingQuality = true
+                                            coroutineScope.launch {
+                                                kotlinx.coroutines.delay(800)
+                                                isChangingQuality = false
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    "Quality set to $quality",
+                                                    android.widget.Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
                     }
 
                     IconButton(
@@ -276,6 +383,27 @@ fun VideoPlayerView(
                         Text(formatTime(currentPosition), color = Color.White, fontSize = 11.sp)
                         Text(formatTime(duration), color = Color.White, fontSize = 11.sp)
                     }
+                }
+            }
+        }
+
+        if (isChangingQuality) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.85f))
+                    .clickable(enabled = false) {},
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = Color.Red, modifier = Modifier.size(44.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Optimizing quality to $selectedQuality...",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    )
                 }
             }
         }

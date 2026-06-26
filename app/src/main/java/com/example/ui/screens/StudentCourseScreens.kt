@@ -74,6 +74,18 @@ fun StudentHomeDashboard(
                     else -> onTabSelect(tab)
                 }
             })
+            
+            // Motivation Tag
+            Box(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+                Text(
+                    "👑 Mere Boss Rahul Bhai | Future Army Boy 🪖",
+                    fontSize = 11.sp,
+                    color = BrandBlueSecondary,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.background(BrandBluePrimary.copy(alpha = 0.05f), RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 6.dp)
+                )
+            }
+            
             Spacer(modifier = Modifier.height(24.dp))
             SectionHeader(title = "Active Enrollment Batches (सक्रिय बैच)")
         }

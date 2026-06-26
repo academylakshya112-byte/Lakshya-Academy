@@ -141,3 +141,19 @@ data class LiveClassEntity(
     val scheduledTime: Long = 0,
     val recordingUri: String = ""
 )
+
+@Entity(tableName = "ai_animation_limits")
+data class AiAnimationLimitEntity(
+    @PrimaryKey val userEmail: String,
+    val count: Int = 5,
+    val weekOfYear: Int = -1,
+    val year: Int = -1
+)
+
+@Entity(tableName = "ai_video_limits")
+data class AiVideoLimitEntity(
+    @PrimaryKey val userEmail: String,
+    val count: Int = 0,
+    val weekOfYear: Int = -1,
+    val year: Int = -1
+)

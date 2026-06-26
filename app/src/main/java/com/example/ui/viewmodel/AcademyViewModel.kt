@@ -49,17 +49,67 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
     var currentUser by mutableStateOf<AppUser?>(null)
         private set
 
+    private fun copyUriToInternalStorage(uriStr: String): String {
+        if (uriStr.isEmpty() || !uriStr.startsWith("content://")) {
+            return uriStr
+        }
+        return try {
+            val context = getApplication<Application>()
+            val uri = android.net.Uri.parse(uriStr)
+            val inputStream = context.contentResolver.openInputStream(uri)
+            if (inputStream != null) {
+                val file = java.io.File(context.filesDir, "profile_photo.jpg")
+                val outputStream = java.io.FileOutputStream(file)
+                val buffer = ByteArray(4096)
+                var bytesRead: Int
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    outputStream.write(buffer, 0, bytesRead)
+                }
+                outputStream.close()
+                inputStream.close()
+                android.net.Uri.fromFile(file).toString()
+            } else {
+                uriStr
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            uriStr
+        }
+    }
+
     fun updateProfile(newName: String, newMobile: String, newPhotoUri: String, newEmail: String) {
         val user = currentUser ?: return
         
         // Remove old user record if email changed
         if (user.email != newEmail) {
             registeredUsers.remove(user.email)
+            try {
+                prefs.edit().remove("reg_${user.email}").apply()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
         
-        val updatedUser = user.copy(name = newName, mobile = newMobile, photoUri = newPhotoUri, email = newEmail)
+        // Copy the chosen content uri to internal storage to avoid permission loss on app death
+        val localPhotoUri = copyUriToInternalStorage(newPhotoUri)
+        
+        val updatedUser = user.copy(name = newName, mobile = newMobile, photoUri = localPhotoUri, email = newEmail)
         currentUser = updatedUser
         registeredUsers[newEmail] = updatedUser
+
+        try {
+            prefs.edit()
+                .putString("reg_$newEmail", "${updatedUser.name}|${updatedUser.role}|${updatedUser.avatarEmoji}|${updatedUser.mobile}|${updatedUser.photoUri}")
+                .putString("logged_in_user_email", updatedUser.email)
+                .putString("logged_in_user_name", updatedUser.name)
+                .putString("logged_in_user_role", updatedUser.role)
+                .putString("logged_in_user_avatar", updatedUser.avatarEmoji)
+                .putString("logged_in_user_mobile", updatedUser.mobile)
+                .putString("logged_in_user_photo_uri", updatedUser.photoUri)
+                .apply()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     var authError by mutableStateOf<String?>(null)
@@ -91,6 +141,42 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    // --- AI Limits ---
+    suspend fun checkAndUseVideoLimit(): Boolean {
+        val email = currentUser?.email ?: return false
+        val cal = java.util.Calendar.getInstance()
+        val currentWeek = cal.get(java.util.Calendar.WEEK_OF_YEAR)
+        val currentYear = cal.get(java.util.Calendar.YEAR)
+
+        val limit = database.academyDao().getVideoLimit(email)
+        return if (limit == null || limit.weekOfYear != currentWeek || limit.year != currentYear) {
+            // New week or new user
+            database.academyDao().insertVideoLimit(AiVideoLimitEntity(email, 1, currentWeek, currentYear))
+            true
+        } else {
+            if (limit.count < 3) {
+                database.academyDao().insertVideoLimit(limit.copy(count = limit.count + 1))
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    suspend fun getRemainingVideoCount(): Int {
+        val email = currentUser?.email ?: return 0
+        val cal = java.util.Calendar.getInstance()
+        val currentWeek = cal.get(java.util.Calendar.WEEK_OF_YEAR)
+        val currentYear = cal.get(java.util.Calendar.YEAR)
+
+        val limit = database.academyDao().getVideoLimit(email)
+        return if (limit == null || limit.weekOfYear != currentWeek || limit.year != currentYear) {
+            3
+        } else {
+            (3 - limit.count).coerceAtLeast(0)
+        }
+    }
+
     // Simple user registry database simulation (in-memory persistent during app run)
     private val registeredUsers = mutableStateMapOf<String, AppUser>().apply {
         put("student@lakshya.com", AppUser("student@lakshya.com", "Anand Yadav", "STUDENT", "📚"))
@@ -106,6 +192,37 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
     // AI Processing Status
     var aiProcessingStatus by mutableStateOf<String?>(null)
         private set
+
+    // --- AI Animation Limits State ---
+    var animationLimit by mutableStateOf<AiAnimationLimitEntity?>(null)
+        private set
+
+    fun loadOrInitAnimationLimit() {
+        val userEmail = currentUser?.email ?: return
+        viewModelScope.launch {
+            val calendar = java.util.Calendar.getInstance()
+            val currentWeek = calendar.get(java.util.Calendar.WEEK_OF_YEAR)
+            val currentYear = calendar.get(java.util.Calendar.YEAR)
+            
+            var limit = repository.getAnimationLimit(userEmail)
+            if (limit == null || limit.weekOfYear != currentWeek || limit.year != currentYear) {
+                limit = AiAnimationLimitEntity(userEmail, 5, currentWeek, currentYear)
+                repository.insertAnimationLimit(limit)
+            }
+            animationLimit = limit
+        }
+    }
+
+    fun decrementAnimationLimit() {
+        val current = animationLimit ?: return
+        if (current.count > 0) {
+            viewModelScope.launch {
+                val updated = current.copy(count = current.count - 1)
+                repository.insertAnimationLimit(updated)
+                animationLimit = updated
+            }
+        }
+    }
 
     // --- State flows from Repository ---
     val allCourses: StateFlow<List<CourseEntity>> = repository.allCourses
@@ -181,28 +298,46 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                         val name = parts[0]
                         val role = parts[1]
                         val avatar = if (parts.size >= 3) parts[2] else "🎓"
-                        registeredUsers[email] = AppUser(email, name, role, avatar)
+                        val mobile = if (parts.size >= 4) parts[3] else ""
+                        val photoUri = if (parts.size >= 5) parts[4] else ""
+                        registeredUsers[email] = AppUser(email, name, role, avatar, mobile, photoUri)
                     }
                 }
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("AcademyViewModel", "Error loading users: ${e.message}")
         }
 
         // Load logged in active user session
-        val savedEmail = prefs.getString("logged_in_user_email", null)
-        val savedName = prefs.getString("logged_in_user_name", null)
-        val savedRole = prefs.getString("logged_in_user_role", null)
-        val savedAvatar = prefs.getString("logged_in_user_avatar", "🎓") ?: "🎓"
-        if (savedEmail != null && savedName != null && savedRole != null) {
-            currentUser = AppUser(savedEmail, savedName, savedRole, savedAvatar)
+        try {
+            val savedEmail = prefs.getString("logged_in_user_email", null)
+            val savedName = prefs.getString("logged_in_user_name", null)
+            val savedRole = prefs.getString("logged_in_user_role", null)
+            val savedAvatar = prefs.getString("logged_in_user_avatar", "🎓") ?: "🎓"
+            val savedMobile = prefs.getString("logged_in_user_mobile", "") ?: ""
+            val savedPhotoUri = prefs.getString("logged_in_user_photo_uri", "") ?: ""
+            if (savedEmail != null && savedName != null && savedRole != null) {
+                currentUser = AppUser(savedEmail, savedName, savedRole, savedAvatar, savedMobile, savedPhotoUri)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("AcademyViewModel", "Error loading session: ${e.message}")
         }
 
-        checkInternetStatus()
+        try {
+            checkInternetStatus()
+        } catch (e: Exception) {
+            isInternetConnectionAvailable = true
+        }
+
         // First startup seed and auto-fill lists
         viewModelScope.launch {
-            seedDatabaseIfEmpty()
-            observeMaterials()
+            try {
+                seedDatabaseIfEmpty()
+                forceReSeedTestsIfNeeded()
+                observeMaterials()
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "Error in startup tasks: ${e.message}")
+            }
         }
     }
 
@@ -744,395 +879,154 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                     title = "Nernst Equation & Cell Potential Calculations",
                     videoUrl = "https://www.w3schools.com/html/movie.mp4",
                     pdfUrl = "Class12_Chemistry_Electrochemistry.pdf",
-                    pdfName = "Electrochemistry Formulas & Nernst Equation Practice Set"
-                )
-            )
-            repository.insertLesson(
-                LessonEntity(
-                    courseId = c12Id,
-                    chapterName = "Physics - Optics",
-                    title = "Wave Optics - Huygen's Principle & Interference",
-                    videoUrl = "https://www.w3schools.com/html/mov_bbb.mp4",
-                    pdfUrl = "Class12_Physics_Optics.pdf",
-                    pdfName = "Huygen's Principle Board Revision Guide"
+                    pdfName = "Nernst Equation Practice Problems"
                 )
             )
 
-            // 3. Seed test items
-            val t1Id = repository.insertTest(
-                TestEntity(
-                    title = "UPSC GS Prelims Syllabus Test - Polity",
-                    type = "Weekly Test",
-                    durationMinutes = 5,
-                    hasNegativeMarking = true,
-                    marksPerCorrect = 2,
-                    marksPerWrong = -0.66f
-                )
-            )
-            val t2Id = repository.insertTest(
-                TestEntity(
-                    title = "UP Police Constable Full Mock Test 1",
-                    type = "Mock Test",
-                    durationMinutes = 10,
-                    hasNegativeMarking = true,
-                    marksPerCorrect = 2,
-                    marksPerWrong = -0.5f
-                )
-            )
+            // 3. Seed test items (Cleared and re-seeded for Class 1 to 12 as requested)
+            repository.deleteAllTests()
+            repository.deleteAllQuestions()
 
-            // Seed questions for Test 1 (Polity)
-            repository.insertQuestion(
-                QuestionEntity(
-                    testId = t1Id,
-                    questionText = "Which Article of the Indian Constitution outlines the 'Basic Structure' doctrine implicitly?",
-                    optionA = "Article 368",
-                    optionB = "Article 13",
-                    optionC = "Article 21",
-                    optionD = "None of the above (it is a judicial innovated doctrine)",
-                    correctIndex = 3
-                )
-            )
-            repository.insertQuestion(
-                QuestionEntity(
-                    testId = t1Id,
-                    questionText = "The Directive Principles of State Policy (DPSP) are borrowed from which country's Constitution?",
-                    optionA = "Ireland",
-                    optionB = "USA",
-                    optionC = "USSR",
-                    optionD = "Australia",
-                    correctIndex = 0
-                )
-            )
-            repository.insertQuestion(
-                QuestionEntity(
-                    testId = t1Id,
-                    questionText = "In which landmark case did the Supreme Court establish the Basic Structure of the Constitution?",
-                    optionA = "Golaknath vs State of Punjab",
-                    optionB = "Kesavananda Bharati vs State of Kerala",
-                    optionC = "Minerva Mills vs Union of India",
-                    optionD = "Maneka Gandhi vs Union of India",
-                    correctIndex = 1
-                )
-            )
+            for (clsNum in 1..12) {
+                val subjects = when {
+                    clsNum <= 5 -> listOf("Mathematics / गणित", "EVS / पर्यावरण अध्ययन", "Hindi & English / हिंदी और अंग्रेजी")
+                    clsNum <= 10 -> listOf("Mathematics / गणित", "Science / विज्ञान", "Social Science / सामाजिक विज्ञान", "Hindi & English / हिंदी और अंग्रेजी")
+                    else -> listOf("Physics / भौतिक विज्ञान", "Chemistry / रसायन विज्ञान", "Biology / जीव विज्ञान", "Mathematics / गणित")
+                }
 
-            // Seed questions for Test 2 (UP Police)
-            repository.insertQuestion(
-                QuestionEntity(
-                    testId = t2Id,
-                    questionText = "Which city is known as the 'Ghazichand Kila / Gateway of Eastern UP' and has historical association with Lord Cornwallis' tomb?",
-                    optionA = "Ghazipur",
-                    optionB = "Varanasi",
-                    optionC = "Ballia",
-                    optionD = "Gorakhpur",
-                    correctIndex = 0
-                )
-            )
-            repository.insertQuestion(
-                QuestionEntity(
-                    testId = t2Id,
-                    questionText = "Among these, who is the writer of Bihar's famous Hindi novel 'Maila Anchal'?",
-                    optionA = "Premchand",
-                    optionB = "Phanishwar Nath Renu",
-                    optionC = "Ramdhari Singh Dinkar",
-                    optionD = "Mahadevi Verma",
-                    correctIndex = 1
-                )
-            )
+                for (subjName in subjects) {
+                    val tId = repository.insertTest(
+                        TestEntity(
+                            title = "Class $clsNum Mock Test - $subjName",
+                            type = "Mock Test",
+                            durationMinutes = 60,
+                            hasNegativeMarking = true,
+                            marksPerCorrect = 4,
+                            marksPerWrong = -1.0f
+                        )
+                    )
 
-            // --- SCHOOL CLASSES MOCK EXAMS (6th to 12th) ---
-            // Seed a test for Class 6
-            val c6TestId = repository.insertTest(
-                TestEntity(
-                    title = "Class 6 Math & Science Basic Booster Mock Test",
-                    type = "Mock Test",
-                    durationMinutes = 15,
-                    hasNegativeMarking = false,
-                    marksPerCorrect = 2,
-                    marksPerWrong = 0.0f
-                )
-            )
-            repository.insertQuestion(
-                QuestionEntity(
-                    testId = c6TestId,
-                    questionText = "What is the smallest prime number? / सबसे छोटी अभाज्य संख्या कौन सी है?",
-                    optionA = "1", optionB = "2", optionC = "3", optionD = "0", correctIndex = 1
-                )
-            )
-            repository.insertQuestion(
-                QuestionEntity(
-                    testId = c6TestId,
-                    questionText = "Which gas do we breath in to survive? / जीवित रहने के लिए हम कौन सी गैस सांस में लेते हैं?",
-                    optionA = "Nitrogen / नाइट्रोजन", optionB = "Carbon dioxide / कार्बन डाइऑक्साइड", optionC = "Oxygen / ऑक्सीजन", optionD = "Hydrogen / हाइड्रोजन", correctIndex = 2
-                )
-            )
+                    // Generate exactly 50 questions for this class and subject
+                    for (qIndex in 1..50) {
+                        val questionText: String
+                        val optA: String
+                        val optB: String
+                        val optC: String
+                        val optD: String
+                        val correctIdx: Int = (qIndex % 4) // deterministic but varies
 
-            // Seed a test for Class 7
-            val c7TestId = repository.insertTest(
-                TestEntity(
-                    title = "Class 7 Social Science & Hindi Grammar Mock Test",
-                    type = "Mock Test",
-                    durationMinutes = 20,
-                    hasNegativeMarking = false,
-                    marksPerCorrect = 2,
-                    marksPerWrong = 0.0f
-                )
-            )
-            repository.insertQuestion(
-                QuestionEntity(
-                    testId = c7TestId,
-                    questionText = "Who was the founder of Mughal Empire in India? / भारत में मुगल साम्राज्य का संस्थापक कौन था?",
-                    optionA = "Akbar / अकबर", optionB = "Babur / बाबर", optionC = "Humayun / हुमायूँ", optionD = "Sher Shah Suri / शेर शाह सूरी", correctIndex = 1
-                )
-            )
+                        when {
+                            subjName.contains("Math") -> {
+                                val num1 = 10 + (qIndex * 7) % 90
+                                val num2 = 5 + (qIndex * 13) % 40
+                                val sumVal = num1 + num2
+                                val diffVal = num1 - num2
+                                when (qIndex % 4) {
+                                    0 -> {
+                                        questionText = "Class $clsNum Maths: Simple calculation. What is $num1 + $num2? / कक्षा $clsNum गणित: सरल गणना। $num1 + $num2 का मान क्या है?"
+                                        optA = if (correctIdx == 0) "$sumVal" else "${sumVal + 5}"
+                                        optB = if (correctIdx == 1) "$sumVal" else "${sumVal - 3}"
+                                        optC = if (correctIdx == 2) "$sumVal" else "${sumVal + 12}"
+                                        optD = if (correctIdx == 3) "$sumVal" else "${sumVal - 1}"
+                                    }
+                                    1 -> {
+                                        questionText = "Class $clsNum Maths: Subtraction. What is $num1 - $num2? / कक्षा $clsNum गणित: घटाव। $num1 - $num2 का मान क्या है?"
+                                        optA = if (correctIdx == 0) "$diffVal" else "${diffVal + 4}"
+                                        optB = if (correctIdx == 1) "$diffVal" else "${diffVal - 6}"
+                                        optC = if (correctIdx == 2) "$diffVal" else "${diffVal + 15}"
+                                        optD = if (correctIdx == 3) "$diffVal" else "${diffVal - 1}"
+                                    }
+                                    2 -> {
+                                        val shortNum1 = 2 + (qIndex % 10)
+                                        val shortNum2 = 3 + (qIndex % 8)
+                                        val multVal = shortNum1 * shortNum2
+                                        questionText = "Class $clsNum Maths: Multiplication. What is $shortNum1 x $shortNum2? / कक्षा $clsNum गणित: गुणा। $shortNum1 x $shortNum2 का मान क्या है?"
+                                        optA = if (correctIdx == 0) "$multVal" else "${multVal + 6}"
+                                        optB = if (correctIdx == 1) "$multVal" else "${multVal - 2}"
+                                        optC = if (correctIdx == 2) "$multVal" else "${multVal + 10}"
+                                        optD = if (correctIdx == 3) "$multVal" else "${multVal - 4}"
+                                    }
+                                    else -> {
+                                        val sqNum = 2 + (qIndex % 12)
+                                        val sqVal = sqNum * sqNum
+                                        questionText = "Class $clsNum Maths: What is the square of $sqNum? / कक्षा $clsNum गणित: $sqNum का वर्ग क्या है?"
+                                        optA = if (correctIdx == 0) "$sqVal" else "${sqVal + 9}"
+                                        optB = if (correctIdx == 1) "$sqVal" else "${sqVal - 8}"
+                                        optC = if (correctIdx == 2) "$sqVal" else "${sqVal + 20}"
+                                        optD = if (correctIdx == 3) "$sqVal" else "${sqVal - 2}"
+                                    }
+                                }
+                            }
+                            subjName.contains("Science") || subjName.contains("Physics") || subjName.contains("Chemistry") || subjName.contains("Biology") || subjName.contains("EVS") -> {
+                                val topics = listOf(
+                                    Triple("Powerhouse of the cell / कोशिका का बिजलीघर", "Mitochondria / माइटोकॉन्ड्रिया", "Ribosome / राइबोसोम"),
+                                    Triple("Boiling point of pure water / शुद्ध जल का क्वथनांक", "100°C", "0°C"),
+                                    Triple("Simplest ketone / सबसे सरल कीटोन", "Propanone / प्रोपेनोन", "Ethanol / इथेनॉल"),
+                                    Triple("Most electronegative element / सबसे अधिक विद्युत ऋणात्मक तत्व", "Fluorine / फ्लोरीन", "Chlorine / क्लोरीन"),
+                                    Triple("Double helix model of DNA discovered by / डीएनए के द्विकुंडलित मॉडल की खोज की थी", "Watson and Crick / वाटसन और क्रिक", "Mendel / मेंडल"),
+                                    Triple("SI Unit of Resistance / प्रतिरोध का SI मात्रक", "Ohm / ओम", "Volt / वोल्ट"),
+                                    Triple("What gas do plants absorb during photosynthesis? / प्रकाश संश्लेषण के दौरान पौधे कौन सी गैस अवशोषित करते हैं?", "Carbon Dioxide / कार्बन डाइऑक्साइड", "Oxygen / ऑक्सीजन"),
+                                    Triple("Which planet is known as Red Planet? / किस ग्रह को लाल ग्रह के रूप में जाना जाता है?", "Mars / मंगल", "Jupiter / बृहस्पति"),
+                                    Triple("The primary source of energy on Earth is / पृथ्वी पर ऊर्जा का प्राथमिक स्रोत है", "The Sun / सूर्य", "Wind / पवन"),
+                                    Triple("Which non-metal is in liquid state / कौन सी अधातु द्रव अवस्था में होती है", "Bromine / ब्रोमीन", "Chlorine / क्लोरीन")
+                                )
+                                val selected = topics[qIndex % topics.size]
+                                questionText = "Class $clsNum Science ($subjName): Identify '${selected.first}'? / कक्षा $clsNum विज्ञान ($subjName): '${selected.first}' की पहचान करें?"
+                                optA = if (correctIdx == 0) selected.second else selected.third
+                                optB = if (correctIdx == 1) selected.second else "None of these / इनमें से कोई नहीं"
+                                optC = if (correctIdx == 2) selected.second else "Both / दोनों"
+                                optD = if (correctIdx == 3) selected.second else "All of the above / उपरोक्त सभी"
+                            }
+                            subjName.contains("Social") || subjName.contains("SST") || subjName.contains("इतिहास") || subjName.contains("भूगोल") -> {
+                                val topics = listOf(
+                                    Triple("Battle of Plassey took place in year / प्लासी का युद्ध किस वर्ष हुआ था?", "1757", "1857"),
+                                    Triple("Primary organ of Indian Constitution implementation / भारतीय संविधान को लागू करने वाला प्राथमिक अंग है", "Parliament / संसद", "Supreme Court / सर्वोच्च न्यायालय"),
+                                    Triple("Largest ocean on Earth / पृथ्वी का सबसे बड़ा महासागर है", "Pacific Ocean / प्रशांत महासागर", "Atlantic Ocean / अटलांटिक महासागर"),
+                                    Triple("In which year did India celebrate its first Republic Day? / भारत ने अपना पहला गणतंत्र दिवस किस वर्ष मनाया था?", "1950", "1947"),
+                                    Triple("Which is the longest river flowing in India? / भारत में बहने वाली सबसे लंबी नदी कौन सी है?", "Ganga / गंगा", "Yamuna / यमुना"),
+                                    Triple("Who is known as Father of Indian Constitution? / भारतीय संविधान के जनक के रूप में किसे जाना जाता है?", "Dr. B.R. Ambedkar / डॉ. बी.आर. अंबेडकर", "Mahatma Gandhi / महात्मा गांधी"),
+                                    Triple("Capital of India before New Delhi / नई दिल्ली से पहले भारत की राजधानी कौन सी थी?", "Calcutta (Kolkata) / कलकत्ता", "Bombay (Mumbai) / मुंबई"),
+                                    Triple("Indian State with longest coastline / सबसे लंबी तटरेखा वाला भारतीय राज्य कौन सा है?", "Gujarat / गुजरात", "Maharashtra / महाराष्ट्र")
+                                )
+                                val selected = topics[qIndex % topics.size]
+                                questionText = "Class $clsNum SST: ${selected.first}"
+                                optA = if (correctIdx == 0) selected.second else selected.third
+                                optB = if (correctIdx == 1) selected.second else "Mughal Empire / मुगल साम्राज्य"
+                                optC = if (correctIdx == 2) selected.second else "Indus River / सिंधु नदी"
+                                optD = if (correctIdx == 3) selected.second else "None of the above / इनमें से कोई नहीं"
+                            }
+                            else -> {
+                                val topics = listOf(
+                                    Triple("Opposite of 'Hot' / 'गर्म' का विलोम शब्द है", "Cold / ठंडा", "Warm / गुनगुना"),
+                                    Triple("Abstract noun of 'Beautiful' is / 'Beautiful' का भाववाचक संज्ञा शब्द है", "Beauty / सुंदरता", "Beautify / सुंदर बनाना"),
+                                    Triple("Identify the correct spelling / सही वर्तनी की पहचान करें", "Receive / प्राप्त करना", "Recieve / प्राप्त करना"),
+                                    Triple("Plural form of 'Child' is / 'Child' का बहुवचन रूप है", "Children / बच्चे", "Childs / बच्चे"),
+                                    Triple("Opposite of 'Happy' / 'खुश' का विलोम शब्द है", "Sad / दुखी", "Glad / प्रसन्न"),
+                                    Triple("Identify correct grammar: 'She ____ a letter yesterday' / 'She ____ _ yesterday' का सही रूप", "wrote / लिखा", "writes / लिखती है")
+                                )
+                                val selected = topics[qIndex % topics.size]
+                                questionText = "Class $clsNum Language: What is the correct answer for '${selected.first}'? / कक्षा $clsNum भाषा: '${selected.first}' का सही उत्तर क्या है?"
+                                optA = if (correctIdx == 0) selected.second else selected.third
+                                optB = if (correctIdx == 1) selected.second else "Incorrect / अशुद्ध"
+                                optC = if (correctIdx == 2) selected.second else "Noun / संज्ञा"
+                                optD = if (correctIdx == 3) selected.second else "None of the above / इनमें से कोई नहीं"
+                            }
+                        }
 
-            // Seed a test for Class 8
-            val c8TestId = repository.insertTest(
-                TestEntity(
-                    title = "Class 8 Science (Force & Friction) Concepts Mock Exam",
-                    type = "Mock Test",
-                    durationMinutes = 15,
-                    hasNegativeMarking = true,
-                    marksPerCorrect = 4,
-                    marksPerWrong = -1f
-                )
-            )
-            repository.insertQuestion(
-                QuestionEntity(
-                    testId = c8TestId,
-                    questionText = "Which force opposes relative motion between two surfaces? / दो सतहों के बीच सापेक्ष गति का विरोध कौन सा बल करता है?",
-                    optionA = "Gravitational force / गुरुत्वाकर्षण बल", optionB = "Magnetic force / चुंबकीय बल", optionC = "Frictional force / घर्षण बल", optionD = "Electrostatic force / स्थिरवैद्युत बल", correctIndex = 2
-                )
-            )
-
-            // Seed a test for Class 9
-            val c9TestId = repository.insertTest(
-                TestEntity(
-                    title = "Class 9 Science laws of Motion Mock Test",
-                    type = "Mock Test",
-                    durationMinutes = 20,
-                    hasNegativeMarking = true,
-                    marksPerCorrect = 2,
-                    marksPerWrong = -0.5f
-                )
-            )
-            repository.insertQuestion(
-                QuestionEntity(
-                    testId = c9TestId,
-                    questionText = "Who gave the three laws of motion? / गति के तीन नियम किसने दिए थे?",
-                    optionA = "Galileo / गैलीलियो", optionB = "Newton / न्यूटन", optionC = "Einstein / आइंस्टीन", optionD = "Kepler / केपलर", correctIndex = 1
-                )
-            )
-
-            // Seed a test for Class 11
-            val c11TestId = repository.insertTest(
-                TestEntity(
-                    title = "Class 11 Science (Physics Kinematics) Revision Mock Test",
-                    type = "Mock Test",
-                    durationMinutes = 30,
-                    hasNegativeMarking = true,
-                    marksPerCorrect = 4,
-                    marksPerWrong = -1.0f
-                )
-            )
-            repository.insertQuestion(
-                QuestionEntity(
-                    testId = c11TestId,
-                    questionText = "What is the acceleration due to gravity on Earth approximately? / पृथ्वी पर गुरुत्वाकर्षण के कारण त्वरण लगभग कितना होता है?",
-                    optionA = "9.8 m/s²", optionB = "10 m/s", optionC = "9.8 cm/s²", optionD = "32 m/s²", correctIndex = 0
-                )
-            )
-
-            // Seed a test for Class 12
-            val c12TestId = repository.insertTest(
-                TestEntity(
-                    title = "Class 12 Boards Electrochemistry & Calculus Mock Test 1",
-                    type = "Mock Test",
-                    durationMinutes = 30,
-                    hasNegativeMarking = true,
-                    marksPerCorrect = 4,
-                    marksPerWrong = -1.0f
-                )
-            )
-            repository.insertQuestion(
-                QuestionEntity(
-                    testId = c12TestId,
-                    questionText = "What is the derivative of sin(x) with respect to x? / x के सापेक्ष sin(x) का अवकलज (derivative) क्या है?",
-                    optionA = "cos(x)", optionB = "-cos(x)", optionC = "sin(x)", optionD = "tan(x)", correctIndex = 0
-                )
-            )
-
-            // === DYNAMIC SEEDING OF 10 MOCK TESTS WITH 50 BILINGUAL QUESTIONS EACH FOR CLASS 10 ===
-            data class TempQuestion(
-                val text: String,
-                val a: String,
-                val b: String,
-                val c: String,
-                val d: String,
-                val correct: Int
-            )
-
-            val qList = listOf(
-                TempQuestion(
-                    "Which organelle is known as the powerhouse of the cell? / कोशिका का शक्तिगृह (पावरहाउस) किसे कहा जाता है?",
-                    "Mitochondria / माइटोकॉन्ड्रिया", "Ribosome / राइबोसोम", "Nucleus / केंद्रक", "Golgi Body / गोल्गी काय", 0
-                ),
-                TempQuestion(
-                    "What is the chemical formula of Water? / पानी का रासायनिक सूत्र क्या है?",
-                    "CO2", "H2O", "O2", "NaCl", 1
-                ),
-                TempQuestion(
-                    "Which gas is most abundant in Earth's atmosphere? / पृथ्वी के वायुमंडल में कौन सी गैस सबसे प्रचुर मात्रा में है?",
-                    "Oxygen / ऑक्सीजन", "Hydrogen / हाइड्रोजन", "Nitrogen / नाइट्रोजन", "Carbon Dioxide / कार्बन डाइऑक्साइड", 2
-                ),
-                TempQuestion(
-                    "What is the speed of light in a vacuum? / निर्वात में प्रकाश की गति क्या है?",
-                    "3 * 10^8 m/s", "3 * 10^6 m/s", "150,000 m/s", "300,000 km/h", 0
-                ),
-                TempQuestion(
-                    "What is the valency of Carbon? / कार्बन की संयोजकता कितनी होती है?",
-                    "2", "3", "4", "6", 2
-                ),
-                TempQuestion(
-                    "Which acid is naturally present in lemon? / नींबू में प्राकृतिक रूप से कौन सा अम्ल होता है?",
-                    "Acetic Acid / एसिटिक अम्ल", "Citric Acid / सिट्रिक अम्ल", "Tartaric Acid / टार्टरिक अम्ल", "Lactic Acid / लैक्टिक अम्ल", 1
-                ),
-                TempQuestion(
-                    "What is the pH value of pure water? / शुद्ध पानी का pH मान कितना होता है?",
-                    "5", "7", "9", "12", 1
-                ),
-                TempQuestion(
-                    "Which planet is known as the Red Planet? / किस ग्रह को लाल ग्रह के नाम से जाना जाता है?",
-                    "Venus / शुक्र", "Mars / मंगल", "Jupiter / बृहस्पति", "Saturn / शनि", 1
-                ),
-                TempQuestion(
-                    "Who formulated the universal law of gravity? / गुरुत्वाकर्षण के सार्वभौमिक नियम का प्रतिपादन किसने किया था?",
-                    "Albert Einstein / अल्बर्ट आइंस्टीन", "Isaac Newton / आइजैक न्यूटन", "Galileo Galilei / गैलीलियो गैलीली", "Nikola Tesla / निकोला टेस्ला", 1
-                ),
-                TempQuestion(
-                    "What is the SI unit of electric current? / विद्युत धारा का SI मात्रक क्या है?",
-                    "Volt / वोल्ट", "Ampere / एम्पियर", "Ohm / ओम", "Watt / वाट", 1
-                ),
-                TempQuestion(
-                    "Which animal is called the ship of the desert? / किस जानवर को रेगिस्तान का जहाज कहा जाता है?",
-                    "Horse / घोड़ा", "Camel / ऊँट", "Elephant / हाथी", "Donkey / गधा", 1
-                ),
-                TempQuestion(
-                    "\"Swaraj is my birthright\" Who raised this slogan? / \"स्वराज मेरा जन्मसिद्ध अधिकार है\" यह नारा किसने दिया था?",
-                    "Lala Lajpat Rai / लाला लाजपत राय", "Bal Gangadhar Tilak / बाल गंगाधर तिलक", "Subhash Chandra Bose / सुभाष चंद्र बोस", "Mahatma Gandhi / महात्मा गांधी", 1
-                ),
-                TempQuestion(
-                    "Who is recognized as the father of the Indian Constitution? / भारतीय संविधान के निर्माता या जनक किसे माना जाता है?",
-                    "Dr. B.R. Ambedkar / डॉ. बी.आर. अम्बेडकर", "Mahatma Gandhi / महात्मा गांधी", "Jawaharlal Nehru / जवाहरलाल नेहरू", "Dr. Rajendra Prasad / डॉ. राजेंद्र प्रसाद", 0
-                ),
-                TempQuestion(
-                    "What is the official capital of India? / भारत की आधिकारिक राजधानी क्या है?",
-                    "Mumbai / मुंबई", "Kolkata / कोलकाता", "New Delhi / नई दिल्ली", "Chennai / चेन्नई", 2
-                ),
-                TempQuestion(
-                    "Which is the largest and deepest ocean on Earth? / पृथ्वी का सबसे बड़ा और सबसे गहरा महासागर कौन सा है?",
-                    "Atlantic Ocean / अटलांटिक महासागर", "Indian Ocean / हिंद महासागर", "Pacific Ocean / प्रशांत महासागर", "Arctic Ocean / आर्कटिक महासागर", 2
-                ),
-                TempQuestion(
-                    "How many bones are there in adult human skeleton? / एक वयस्क मानव कंकाल में कितनी हड्डियाँ होती हैं?",
-                    "150", "206", "300", "208", 1
-                ),
-                TempQuestion(
-                    "Which vitamin is synthesized in skin using sunlight? / धूप की मदद से त्वचा में कौन सा विटामिन संश्लेषित होता है?",
-                    "Vitamin A / विटामिन ए", "Vitamin B12 / विटामिन बी12", "Vitamin C / विटामिन सी", "Vitamin D / विटामिन डी", 3
-                ),
-                TempQuestion(
-                    "Who served as the first Prime Minister of India? / भारत के प्रथम प्रधानमंत्री कौन थे?",
-                    "Jawaharlal Nehru / जवाहरलाल नेहरू", "Sardar Patel / सरदार पटेल", "Lal Bahadur Shastri / लाल बहादुर शास्त्री", "Dr. Rajendra Prasad / डॉ. राजेंद्र प्रसाद", 0
-                ),
-                TempQuestion(
-                    "Which is the highest mountain peak in the world? / विश्व की सबसे ऊंची पर्वत चोटी कौन सी है?",
-                    "K2 / के2", "Mount Everest / माउंट एवरेस्ट", "Kanchenjunga / कंचनजंगा", "Lhotse / ल्होत्से", 1
-                ),
-                TempQuestion(
-                    "Which Indian state is famously called 'Spices Garden of India'? / किस भारतीय राज्य को 'मसालों का बगीचा' कहा जाता है?",
-                    "Karnataka / कर्नाटक", "Andhra Pradesh / आंध्र प्रदेश", "Tamil Nadu / तमिलनाडु", "Kerala / केरल", 3
-                ),
-                TempQuestion(
-                    "What is the national animal of India? / भारत का राष्ट्रीय पशु कौन सा है?",
-                    "Lion / शेर", "Bengal Tiger / बंगाल टाइगर", "Leopard / तेंदुआ", "Elephant / हाथी", 1
-                ),
-                TempQuestion(
-                    "In which historic year did India attain independence? / भारत को किस ऐतिहासिक वर्ष में स्वतंत्रता प्राप्त हुई थी?",
-                    "1935", "1942", "1947", "1950", 2
-                ),
-                TempQuestion(
-                    "Who composed the national anthem 'Jana Gana Mana'? / राष्ट्रीय गान 'जन गण मन' की रचना किसने की थी?",
-                    "Bankim Chandra Chattopadhyay / बंकिम चंद्र चट्टोपाध्याय", "Rabindranath Tagore / रवींद्रनाथ टैगोर", "Sarojini Naidu / सरोजिनी नायडू", "Mahatma Gandhi / महात्मा गांधी", 1
-                ),
-                TempQuestion(
-                    "Which is the smallest Indian state by geographical area? / भौगोलिक क्षेत्रफल के आधार पर भारत का सबसे छोटा राज्य कौन सा है?",
-                    "Sikkim / सिक्किम", "Goa / गोवा", "Tripura / त्रिपुरा", "Mizoram / मिजोरम", 1
-                ),
-                TempQuestion(
-                    "What is the mathematical formula for area of a circle? / वृत्त के क्षेत्रफल का गणितीय सूत्र क्या है?",
-                    "2*pi*r", "pi * r^2", "pi * r^3", "2*pi*r^2", 1
-                ),
-                TempQuestion(
-                    "Who is revered as the 'Missile Man of India'? / किसे भारत के 'मिसाइल मैन' के रूप में जाना जाता है?",
-                    "Dr. Homi Bhabha / डॉ. होमी भाभा", "Dr. A.P.J. Abdul Kalam / डॉ. ए.पी.जे. अब्दुल कलाम", "Dr. Vikram Sarabhai / डॉ. विक्रम साराभाई", "Satish Dhawan / सतीश धवन", 1
-                ),
-                TempQuestion(
-                    "Which endocrine gland is commonly known as the master gland? / किस अंतःस्रावी ग्रंथि को 'मास्टर ग्रंथि' कहा जाता है?",
-                    "Thyroid / थायराइड", "Pituitary / पीयूष ग्रंथि", "Adrenal / एड्रेनल", "Pancreas / अग्न्याशय", 1
-                ),
-                TempQuestion(
-                    "Which non-metal is liquid at room temperature? / कौन सी अधातु कमरे के तापमान पर तरल होती है?",
-                    "Phosphorus / फास्फोरस", "Carbon / कार्बन", "Helium / हीलियम", "Bromine / ब्रोमीन", 3
-                ),
-                TempQuestion(
-                    "Which pigment is responsible for green color in leaves? / पत्तियों में हरे रंग के लिए कौन सा वर्णक जिम्मेदार होता है?",
-                    "Chlorophyll / क्लोरोफिल", "Carotenoids / कैरोटीनॉयड", "Hemoglobin / हीमोग्लोबिन", "Melanin / मेलेनिन", 0
-                ),
-                TempQuestion(
-                    "Who invented the first practical voice telephone? / पहले व्यावहारिक टेलीफोन का आविष्कार किसने किया था?",
-                    "Thomas Edison / थॉमस एडिसन", "Alexander Graham Bell / अलेक्जेंडर ग्राहम बेल", "Guglielmo Marconi / गुग्लिएल्मो मार्कोनी", "Benjamin Franklin / बेंजामिन फ्रैंकलिन", 1
-                ),
-                TempQuestion(
-                    "Which hot desert is known as the largest in the world? / किस गर्म मरुस्थल को विश्व का सबसे बड़ा मरुस्थल माना जाता है?",
-                    "Gobi Desert / गोबी मरुस्थल", "Thar Desert / थार मरुस्थल", "Sahara Desert / सहारा मरुस्थल", "Kalahari Desert / कालाहारी मरुस्थल", 2
-                ),
-                TempQuestion(
-                    "What is the approx value of Archimedes constant Pi (π)? / आर्किमिडीज नियतांक पाई (π) का अनुमानित मान क्या है?",
-                    "2.14", "3.14159", "1.414", "1.732", 1
-                ),
-                TempQuestion(
-                    "What is the total sum of interior angles in any triangle? / किसी भी त्रिभुज के आंतरिक कोणों का कुल योग कितना होता है?",
-                    "90 degrees / 90 अंश", "180 degrees / 180 अंश", "360 degrees / 360 अंश", "270 degrees / 270 अंश", 1
-                ),
-                TempQuestion(
-                    "Which star is structurally closest to Earth? / कौन सा तारा पृथ्वी के सबसे निकट स्थित है?",
-                    "Sirius / सीरियस", "Alpha Centauri / अल्फा सेंटौरी", "Proxima Centauri / प्रोक्सिमा सेंटौरी", "The Sun / सूर्य", 3
-                ),
-                TempQuestion(
-                    "Who was chosen as the first President of independent India? / स्वतंत्र भारत के प्रथम राष्ट्रपति के रूप में किसे चुना गया था?",
-                    "Dr. Rajendra Prasad / डॉ. राजेंद्र प्रसाद", "Dr. S. Radhakrishnan / डॉ. एस. राधाकृष्णन", "Jawaharlal Nehru / जवाहरलाल नेहरू", "Sardar Patel / सरदार पटेल", 0
-                ),
-                TempQuestion(
-                    "In which ancient city is the beautiful Taj Mahal monument located? / प्रसिद्ध ऐतिहासिक स्मारक ताजमहल किस शहर में स्थित है?",
-                    "Delhi / दिल्ली", "Jaipur / जयपुर", "Agra / आगरा", "Lucknow / लखनऊ", 2
-                ),
-                TempQuestion(
-                    "Which disease is caused directly by Vitamin C deficiency? / विटामिन सी की कमी (कमी) से कौन सा रोग होता है?",
-                    "Rickets / सूखा रोग (रिकेट्स)", "Beriberi / बेरीबेरी", "Scurvy / स्कर्वी", "Night Blindness / रतौंधी", 2
-                ),
-                TempQuestion(
-                    "What is the boiling point of pure water under standard conditions? / मानक परिस्थितियों में पानी का क्वथनांक सेल्सियस में कितना होता है?",
-                    "50°C", "100°C", "80°C", "0°C", 1
-                ),
-                TempQuestion(
-                    "Name the longest flowing river on our planet Earth. / हमारी पृथ्वी पर सबसे लंबी नदी का नाम क्या है?",
-                    "Amazon River / अमेज़न नदी", "Nile River / नील नदी", "Ganga River / गंगा नदी", "Yangtze River / यांग्त्ज़ी नदी", 1
-                ),
-                TempQuestion(
-                    "Which planet is designated as the largest in our solar system? / हमारे सौरमंडल का सबसे बड़ा ग्रह किसे नामित किया गया है?",
-                    "Earth / पृथ्वी", "Jupiter / बृहस्पति", "Saturn / शनि", "Mars / मंगल", 1
-                )
-            )
+                        repository.insertQuestion(
+                            QuestionEntity(
+                                testId = tId,
+                                questionText = questionText,
+                                optionA = optA,
+                                optionB = optB,
+                                optionC = optC,
+                                optionD = optD,
+                                correctIndex = correctIdx
+                            )
+                        )
+                    }
+                }
+            }
 
             // 4. Seed Support Materials
             repository.insertMaterial(
@@ -1207,67 +1101,58 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
             )
         }
 
-        // Seed default banners if empty
-        val bannerCheck = repository.allBanners.first()
-if (!bannerCheck.any { it.title.contains("Facebook") }) {
-             repository.insertBanner(
-                BannerEntity(
-                    title = "Join Our Facebook Community! 👥",
-                    imageUrl = "https://images.unsplash.com/photo-1543269865-cbf427effbad?w=600&auto=format&fit=crop&q=60",
-                    linkUrl = "https://www.facebook.com/share/1Ld9zB8Khi/",
-                    buttonText = "FOLLOW PAGE",
-                    description = "Stay updated with announcements, class schedules and community discussions on our official Facebook Page."
+        // Seed default banners if empty and not seeded before
+        val hasSeededBanners = prefs.getBoolean("has_seeded_banners_v3", false)
+        if (!hasSeededBanners) {
+            val bannerCheck = repository.allBanners.first()
+            if (bannerCheck.isEmpty()) {
+                repository.insertBanner(
+                    BannerEntity(
+                        title = "Join Our Facebook Community! 👥",
+                        imageUrl = "https://images.unsplash.com/photo-1543269865-cbf427effbad?w=600&auto=format&fit=crop&q=60",
+                        linkUrl = "https://www.facebook.com/share/1Ld9zB8Khi/",
+                        buttonText = "FOLLOW PAGE",
+                        description = "Stay updated with announcements, class schedules and community discussions on our official Facebook Page."
+                    )
                 )
-            )
-        }
-        if (!bannerCheck.any { it.title.contains("Lakshya Batch") }) {
-             repository.insertBanner(
-                BannerEntity(
-                    title = "लक्ष्य बैच (Lakshya Batch) 2024-25 - YouTube पर पहली बार FREE!",
-                    imageUrl = "android.resource://com.aistudio.lakshya_academy.gzkvpm/drawable/lakshya_batch_banner_1781437391844",
-                    linkUrl = "COURSES",
-                    buttonText = "Watch Now",
-                    description = "Features: Live classes, notes, test series, 100% preparation by Pankaj sir, Kamlesh sir, Dushyant sir."
+                repository.insertBanner(
+                    BannerEntity(
+                        title = "लक्ष्य बैच (Lakshya Batch) 2024-25 - YouTube पर पहली बार FREE!",
+                        imageUrl = "android.resource://com.aistudio.lakshya_academy.gzkvpm/drawable/lakshya_batch_banner_1781437391844",
+                        linkUrl = "COURSES",
+                        buttonText = "Watch Now",
+                        description = "Features: Live classes, notes, test series, 100% preparation by Pankaj sir, Kamlesh sir, Dushyant sir."
+                    )
                 )
-            )
-        }
-        if (bannerCheck.isEmpty()) {
-            repository.insertBanner(
-                BannerEntity(
-                    title = "Follow Our Instagram for Daily GK Reels! 📲",
-                    imageUrl = "https://images.unsplash.com/photo-1611262588024-d12430b98920?w=600&auto=format&fit=crop&q=60",
-                    linkUrl = "https://www.instagram.com/lakshya_academy_sirgitha_gzpr?igsh=MXU5eHVicWRhNmgwag==",
-                    buttonText = "FOLLOW US",
-                    description = "Get short tricks, current affairs quiz and exam notification reels directly on Instagram!"
+                repository.insertBanner(
+                    BannerEntity(
+                        title = "Follow Our Instagram for Daily GK Reels! 📲",
+                        imageUrl = "https://images.unsplash.com/photo-1611262588024-d12430b98920?w=600&auto=format&fit=crop&q=60",
+                        linkUrl = "https://www.instagram.com/lakshya_academy_sirgitha_gzpr?igsh=MXU5eHVicWRhNmgwag==",
+                        buttonText = "FOLLOW US",
+                        description = "Get short tricks, current affairs quiz and exam notification reels directly on Instagram!"
+                    )
                 )
-            )
-            repository.insertBanner(
-                BannerEntity(
-                    title = "Join Official Telegram Study Channel! 💎",
-                    imageUrl = "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=600&auto=format&fit=crop&q=60",
-                    linkUrl = "https://t.me/lakshya_academy",
-                    buttonText = "JOIN NOW",
-                    description = "Download free PDFs, class notes, schedules & interactive discussion worksheets instantly."
+                repository.insertBanner(
+                    BannerEntity(
+                        title = "Join Official Telegram Study Channel! 💎",
+                        imageUrl = "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=600&auto=format&fit=crop&q=60",
+                        linkUrl = "https://t.me/lakshya_academy",
+                        buttonText = "JOIN NOW",
+                        description = "Download free PDFs, class notes, schedules & interactive discussion worksheets instantly."
+                    )
                 )
-            )
-                        repository.insertBanner(
-                BannerEntity(
-                    title = "लक्ष्य बैच (Lakshya Batch) 2024-25 - YouTube पर पहली बार FREE!",
-                    imageUrl = "android.resource://com.aistudio.lakshya_academy.gzkvpm/drawable/lakshya_batch_banner_1781437391844",
-                    linkUrl = "COURSES",
-                    buttonText = "Watch Now",
-                    description = "Features: Live classes, notes, test series, 100% preparation by Pankaj sir, Kamlesh sir, Dushyant sir."
+                repository.insertBanner(
+                    BannerEntity(
+                        title = "Lakshya All-Subject Special Batch Starting! 🔴",
+                        imageUrl = "https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=600&auto=format&fit=crop&q=60",
+                        linkUrl = "COURSES",
+                        buttonText = "ENROLL",
+                        description = "A new high-yield mock-test batch containing All-Subject lessons starts this Monday. Secure your rank now!"
+                    )
                 )
-            )
-            repository.insertBanner(
-                BannerEntity(
-                    title = "Lakshya All-Subject Special Batch Starting! 🔴",
-                    imageUrl = "https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=600&auto=format&fit=crop&q=60",
-                    linkUrl = "COURSES",
-                    buttonText = "ENROLL",
-                    description = "A new high-yield mock-test batch containing All-Subject lessons starts this Monday. Secure your rank now!"
-                )
-            )
+            }
+            prefs.edit().putBoolean("has_seeded_banners_v3", true).apply()
         }
     }
 
@@ -1324,7 +1209,7 @@ if (!bannerCheck.any { it.title.contains("Facebook") }) {
             
             // Save self-registration dynamically so they persist across app sessions
             try {
-                prefs.edit().putString("reg_$formattedEmail", "${finalProfile.name}|${finalProfile.role}|${finalProfile.avatarEmoji}").apply()
+                prefs.edit().putString("reg_$formattedEmail", "${finalProfile.name}|${finalProfile.role}|${finalProfile.avatarEmoji}|${finalProfile.mobile}|${finalProfile.photoUri}").apply()
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -1338,6 +1223,8 @@ if (!bannerCheck.any { it.title.contains("Facebook") }) {
                     .putString("logged_in_user_name", finalProfile.name)
                     .putString("logged_in_user_role", finalProfile.role)
                     .putString("logged_in_user_avatar", finalProfile.avatarEmoji)
+                    .putString("logged_in_user_mobile", finalProfile.mobile)
+                    .putString("logged_in_user_photo_uri", finalProfile.photoUri)
                     .apply()
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -1356,6 +1243,8 @@ if (!bannerCheck.any { it.title.contains("Facebook") }) {
                 .remove("logged_in_user_name")
                 .remove("logged_in_user_role")
                 .remove("logged_in_user_avatar")
+                .remove("logged_in_user_mobile")
+                .remove("logged_in_user_photo_uri")
                 .apply()
         } catch (e: Exception) {
             e.printStackTrace()
@@ -1377,6 +1266,8 @@ if (!bannerCheck.any { it.title.contains("Facebook") }) {
                     .remove("logged_in_user_name")
                     .remove("logged_in_user_role")
                     .remove("logged_in_user_avatar")
+                    .remove("logged_in_user_mobile")
+                    .remove("logged_in_user_photo_uri")
                     .apply()
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -1769,11 +1660,163 @@ if (!bannerCheck.any { it.title.contains("Facebook") }) {
 
     // AI Mock Test Generator removed as requested (replaced by new Module 3).
 
+    fun forceReSeedTestsIfNeeded() {
+        viewModelScope.launch {
+            val checkFlag = prefs.getBoolean("has_cleaned_and_seeded_tests_v6", false)
+            if (!checkFlag) {
+                repository.deleteAllTests()
+                repository.deleteAllQuestions()
+
+                for (clsNum in 1..12) {
+                    val subjects = when {
+                        clsNum <= 5 -> listOf("Mathematics / गणित", "EVS / पर्यावरण अध्ययन", "Hindi & English / हिंदी और अंग्रेजी")
+                        clsNum <= 10 -> listOf("Mathematics / गणित", "Science / विज्ञान", "Social Science / सामाजिक विज्ञान", "Hindi & English / हिंदी और अंग्रेजी")
+                        else -> listOf("Physics / भौतिक विज्ञान", "Chemistry / रसायन विज्ञान", "Biology / जीव विज्ञान", "Mathematics / गणित")
+                    }
+
+                    for (subjName in subjects) {
+                        val tId = repository.insertTest(
+                            TestEntity(
+                                title = "Class $clsNum Mock Test - $subjName",
+                                type = "Mock Test",
+                                durationMinutes = 60,
+                                hasNegativeMarking = true,
+                                marksPerCorrect = 4,
+                                marksPerWrong = -1.0f
+                            )
+                        )
+
+                        // Generate exactly 50 questions for this class and subject
+                        for (qIndex in 1..50) {
+                            var questionText = ""
+                            var optA = ""
+                            var optB = ""
+                            var optC = ""
+                            var optD = ""
+                            val correctIdx = (qIndex % 4)
+
+                            when {
+                                subjName.contains("Math") -> {
+                                    val num1 = 10 + (qIndex * 7) % 90
+                                    val num2 = 5 + (qIndex * 13) % 40
+                                    val sumVal = num1 + num2
+                                    val diffVal = num1 - num2
+                                    when (qIndex % 4) {
+                                        0 -> {
+                                            questionText = "Class $clsNum Maths: Simple calculation. What is $num1 + $num2? / कक्षा $clsNum गणित: सरल गणना। $num1 + $num2 का मान क्या है?"
+                                            optA = if (correctIdx == 0) "$sumVal" else "${sumVal + 5}"
+                                            optB = if (correctIdx == 1) "$sumVal" else "${sumVal - 3}"
+                                            optC = if (correctIdx == 2) "$sumVal" else "${sumVal + 12}"
+                                            optD = if (correctIdx == 3) "$sumVal" else "${sumVal - 1}"
+                                        }
+                                        1 -> {
+                                            questionText = "Class $clsNum Maths: Subtraction. What is $num1 - $num2? / कक्षा $clsNum गणित: घटाव। $num1 - $num2 का मान क्या है?"
+                                            optA = if (correctIdx == 0) "$diffVal" else "${diffVal + 4}"
+                                            optB = if (correctIdx == 1) "$diffVal" else "${diffVal - 6}"
+                                            optC = if (correctIdx == 2) "$diffVal" else "${diffVal + 15}"
+                                            optD = if (correctIdx == 3) "$diffVal" else "${diffVal - 1}"
+                                        }
+                                        2 -> {
+                                            val shortNum1 = 2 + (qIndex % 10)
+                                            val shortNum2 = 3 + (qIndex % 8)
+                                            val multVal = shortNum1 * shortNum2
+                                            questionText = "Class $clsNum Maths: Multiplication. What is $shortNum1 x $shortNum2? / कक्षा $clsNum गणित: गुणा। $shortNum1 x $shortNum2 का मान क्या है?"
+                                            optA = if (correctIdx == 0) "$multVal" else "${multVal + 6}"
+                                            optB = if (correctIdx == 1) "$multVal" else "${multVal - 2}"
+                                            optC = if (correctIdx == 2) "$multVal" else "${multVal + 10}"
+                                            optD = if (correctIdx == 3) "$multVal" else "${multVal - 4}"
+                                        }
+                                        else -> {
+                                            val sqNum = 2 + (qIndex % 12)
+                                            val sqVal = sqNum * sqNum
+                                            questionText = "Class $clsNum Maths: What is the square of $sqNum? / कक्षा $clsNum गणित: $sqNum का वर्ग क्या है?"
+                                            optA = if (correctIdx == 0) "$sqVal" else "${sqVal + 9}"
+                                            optB = if (correctIdx == 1) "$sqVal" else "${sqVal - 8}"
+                                            optC = if (correctIdx == 2) "$sqVal" else "${sqVal + 20}"
+                                            optD = if (correctIdx == 3) "$sqVal" else "${sqVal - 2}"
+                                        }
+                                    }
+                                }
+                                subjName.contains("Science") || subjName.contains("Physics") || subjName.contains("Chemistry") || subjName.contains("Biology") || subjName.contains("EVS") -> {
+                                    val topics = listOf(
+                                        Triple("Powerhouse of the cell / कोशिका का बिजलीघर", "Mitochondria / माइटोकॉन्ड्रिया", "Ribosome / राइबोसोम"),
+                                        Triple("Boiling point of pure water / शुद्ध जल का क्वथनांक", "100°C / १००°C", "0°C / ०°C"),
+                                        Triple("Simplest ketone / सबसे सरल कीटोन", "Propanone / प्रोपेनोन", "Ethanol / इथेनॉल"),
+                                        Triple("Most electronegative element / सबसे अधिक विद्युत ऋणात्मक तत्व", "Fluorine / फ्लोरीन", "Chlorine / क्लोरीन"),
+                                        Triple("Double helix model of DNA discovered by / डीएनए के द्विकुंडलित मॉडल की खोज की थी", "Watson and Crick / वाटसन और क्रिक", "Mendel / मेंडल"),
+                                        Triple("SI Unit of Resistance / प्रतिरोध का SI मात्रक", "Ohm / ओम", "Volt / वोल्ट"),
+                                        Triple("What gas do plants absorb during photosynthesis? / प्रकाश संश्लेषण के दौरान पौधे कौन सी गैस अवशोषित करते हैं?", "Carbon Dioxide / कार्बन डाइऑक्साइड", "Oxygen / ऑक्सीजन"),
+                                        Triple("Which planet is known as Red Planet? / किस ग्रह को लाल ग्रह के रूप में जाना जाता है?", "Mars / मंगल", "Jupiter / बृहस्पति"),
+                                        Triple("The primary source of energy on Earth is / पृथ्वी पर ऊर्जा का प्राथमिक स्रोत है", "The Sun / सूर्य", "Wind / पवन"),
+                                        Triple("Which non-metal is in liquid state / कौन सी अधातु द्रव अवस्था में होती है", "Bromine / ब्रोमीन", "Chlorine / क्लोरीन")
+                                    )
+                                    val selected = topics[qIndex % topics.size]
+                                    questionText = "Class $clsNum Science ($subjName): Identify '${selected.first}'? / कक्षा $clsNum विज्ञान ($subjName): '${selected.first}' की पहचान करें?"
+                                    optA = if (correctIdx == 0) selected.second else selected.third
+                                    optB = if (correctIdx == 1) selected.second else "None of these / इनमें से कोई नहीं"
+                                    optC = if (correctIdx == 2) selected.second else "Both / दोनों"
+                                    optD = if (correctIdx == 3) selected.second else "All of the above / उपरोक्त सभी"
+                                }
+                                subjName.contains("Social") || subjName.contains("SST") || subjName.contains("इतिहास") || subjName.contains("भूगोल") -> {
+                                    val topics = listOf(
+                                        Triple("Battle of Plassey took place in year / प्लासी का युद्ध किस वर्ष हुआ था?", "1757", "1857"),
+                                        Triple("Primary organ of Indian Constitution implementation / भारतीय संविधान को लागू करने वाला प्राथमिक अंग है", "Parliament / संसद", "Supreme Court / सर्वोच्च न्यायालय"),
+                                        Triple("Largest ocean on Earth / पृथ्वी का सबसे बड़ा महासागर है", "Pacific Ocean / प्रशांत महासागर", "Atlantic Ocean / अटलांटिक महासागर"),
+                                        Triple("In which year did India celebrate its first Republic Day? / भारत ने अपना पहला गणतंत्र दिवस किस वर्ष मनाया था?", "1950 / १९५०", "1947 / १९४७"),
+                                        Triple("Which is the longest river flowing in India? / भारत में बहने वाली सबसे लंबी नदी कौन सी है?", "Ganga / गंगा", "Yamuna / यमुना"),
+                                        Triple("Who is known as Father of Indian Constitution? / भारतीय संविधान के जनक के रूप में किसे जाना जाता है?", "Dr. B.R. Ambedkar / डॉ. बी.आर. अंबेडकर", "Mahatma Gandhi / महात्मा गांधी"),
+                                        Triple("Capital of India before New Delhi / नई दिल्ली से पहले भारत की राजधानी कौन सी थी?", "Calcutta (Kolkata) / कलकत्ता", "Bombay (Mumbai) / मुंबई"),
+                                        Triple("Indian State with longest coastline / सबसे लंबी तटरेखा वाला भारतीय राज्य कौन सा है?", "Gujarat / गुजरात", "Maharashtra / महाराष्ट्र")
+                                    )
+                                    val selected = topics[qIndex % topics.size]
+                                    questionText = "Class $clsNum SST: ${selected.first}"
+                                    optA = if (correctIdx == 0) selected.second else selected.third
+                                    optB = if (correctIdx == 1) selected.second else "Mughal Empire / मुगल साम्राज्य"
+                                    optC = if (correctIdx == 2) selected.second else "Indus River / सिंधु नदी"
+                                    optD = if (correctIdx == 3) selected.second else "None of the above / इनमें से कोई नहीं"
+                                }
+                                else -> {
+                                    val topics = listOf(
+                                        Triple("Opposite of 'Hot' / 'गर्म' का विलोम शब्द है", "Cold / ठंडा", "Warm / गुनगुना"),
+                                        Triple("Abstract noun of 'Beautiful' is / 'Beautiful' का भाववाचक संज्ञा शब्द है", "Beauty / सुंदरता", "Beautify / सुंदर बनाना"),
+                                        Triple("Identify the correct spelling / सही वर्तनी की पहचान करें", "Receive / प्राप्त करना", "Recieve / प्राप्त करना"),
+                                        Triple("Plural form of 'Child' is / 'Child' का बहुवचन रूप है", "Children / बच्चे", "Childs / बच्चे"),
+                                        Triple("Opposite of 'Happy' / 'खुश' का विलोम शब्द है", "Sad / दुखी", "Glad / प्रसन्न"),
+                                        Triple("Identify correct grammar: 'She ____ a letter yesterday' / 'She ____ _ yesterday' का सही रूप", "wrote / लिखा", "writes / लिखती है")
+                                    )
+                                    val selected = topics[qIndex % topics.size]
+                                    questionText = "Class $clsNum Language: What is the correct answer for '${selected.first}'? / कक्षा $clsNum भाषा: '${selected.first}' का सही उत्तर क्या है?"
+                                    optA = if (correctIdx == 0) selected.second else selected.third
+                                    optB = if (correctIdx == 1) selected.second else "Incorrect / अशुद्ध"
+                                    optC = if (correctIdx == 2) selected.second else "Noun / संज्ञा"
+                                    optD = if (correctIdx == 3) selected.second else "None of the above / इनमें से कोई नहीं"
+                                }
+                            }
+
+                            repository.insertQuestion(
+                                QuestionEntity(
+                                    testId = tId,
+                                    questionText = questionText,
+                                    optionA = optA,
+                                    optionB = optB,
+                                    optionC = optC,
+                                    optionD = optD,
+                                    correctIndex = correctIdx
+                                )
+                            )
+                        }
+                    }
+                }
+                prefs.edit().putBoolean("has_cleaned_and_seeded_tests_v6", true).apply()
+            }
+        }
+    }
+
     fun generateWeeklyMockTests() {
         viewModelScope.launch {
             val user = currentUser ?: return@launch
             val existingTests = repository.allTests.first()
-            val classesToGenerate = listOf("Class 5", "Class 6", "Class 7", "Class 8", "Class 9", "Class 10", "Class 11", "Class 12")
+            val classesToGenerate = (1..12).map { "Class $it" }
             val currentWeek = java.util.Calendar.getInstance().get(java.util.Calendar.WEEK_OF_YEAR)
             
             for (cls in classesToGenerate) {
@@ -1793,24 +1836,89 @@ if (!bannerCheck.any { it.title.contains("Facebook") }) {
                     val subjects = listOf("Science/विज्ञान", "History/इतिहास", "English/अंग्रेजी", "GK/सामान्य ज्ञान")
                     for (i in 1..50) {
                         val isMath = (1..10).random() > 6
-                        val qTxt = if (isMath) {
+                        val questionText: String
+                        val optA: String
+                        val optB: String
+                        val optC: String
+                        val optD: String
+                        val correctIdx = (0..3).random()
+
+                        if (isMath) {
                             val a = (11..99).random()
-                            val b = (11..99).random()
-                            "What is $a + $b ? / $a और $b का योग क्या है?"
+                            val b = (15..95).random()
+                            val mathType = (0..2).random()
+                            when (mathType) {
+                                0 -> {
+                                    val ans = a + b
+                                    questionText = "Class $cls Maths: What is $a + $b? / $cls गणित: $a और $b का योग क्या है?"
+                                    optA = if (correctIdx == 0) "$ans" else "${ans + (1..10).random()}"
+                                    optB = if (correctIdx == 1) "$ans" else "${ans - (1..10).random()}"
+                                    optC = if (correctIdx == 2) "$ans" else "${ans + 12}"
+                                    optD = if (correctIdx == 3) "$ans" else "${ans - 5}"
+                                }
+                                1 -> {
+                                    val ans = a - b
+                                    questionText = "Class $cls Maths: What is $a - $b? / $cls गणित: $a - $b का मान क्या है?"
+                                    optA = if (correctIdx == 0) "$ans" else "${ans + 3}"
+                                    optB = if (correctIdx == 1) "$ans" else "${ans - 4}"
+                                    optC = if (correctIdx == 2) "$ans" else "${ans + 10}"
+                                    optD = if (correctIdx == 3) "$ans" else "${ans - 1}"
+                                }
+                                else -> {
+                                    val xVal = (2..9).random()
+                                    val yVal = (3..9).random()
+                                    val ans = xVal * yVal
+                                    questionText = "Class $cls Maths: What is $xVal x $yVal? / $cls गणित: $xVal x $yVal का गुणात्मक मान क्या है?"
+                                    optA = if (correctIdx == 0) "$ans" else "${ans + 6}"
+                                    optB = if (correctIdx == 1) "$ans" else "${ans - 2}"
+                                    optC = if (correctIdx == 2) "$ans" else "${ans + 8}"
+                                    optD = if (correctIdx == 3) "$ans" else "${ans - 1}"
+                                }
+                            }
                         } else {
-                            val subject = subjects.random()
-                            "$cls - $subject Question $i? Choose correct missing fact. / $cls - $subject का विश्लेषणात्मक प्रश्न $i?"
+                            val subjectEnum = subjects.random()
+                            val topics = when {
+                                subjectEnum.contains("Science") || subjectEnum.contains("विज्ञान") -> listOf(
+                                    Triple("What is the chemical formula of Water? / पानी का रासायनिक सूत्र क्या है?", "H2O / एच२ओ", "CO2 / CO2"),
+                                    Triple("Which gas do we inhale to breathe? / हम सांस लेने के लिए कौन सी गैस ग्रहण करते हैं?", "Oxygen / ऑक्सीजन", "Nitrogen / नाइट्रोजन"),
+                                    Triple("What is the primary source of energy on Earth? / पृथ्वी पर ऊर्जा का प्राथमिक स्रोत क्या है?", "Sunlight / सूर्य का प्रकाश", "Coal / कोयला"),
+                                    Triple("Which organ pumps blood in human body? / मानव शरीर में रक्त को कौन सा अंग पंप करता है?", "Heart / हृदय", "Lungs / फेफड़े"),
+                                    Triple("What is the boiling point of pure water? / शुद्ध पानी का क्वथनांक क्या होता है?", "100°C / १००°C", "0°C / ०°C")
+                                )
+                                subjectEnum.contains("History") || subjectEnum.contains("SST") || subjectEnum.contains("इतिहास") -> listOf(
+                                    Triple("When did India become independent? / भारत कब स्वतंत्र हुआ था?", "1947 / १९४७", "1950 / १९५०"),
+                                    Triple("Who is known as the Father of the Nation of India? / भारत के राष्ट्रपिता के रूप में किसे जाना जाता है?", "Mahatma Gandhi / महात्मा गांधी", "Jawaharlal Nehru / जवाहरलाल नेहरू"),
+                                    Triple("Where is the famous Taj Mahal located? / प्रसिद्ध ताजमहल कहाँ स्थित है?", "Agra / आगरा", "Delhi / दिल्ली"),
+                                    Triple("Which is the largest country by land area? / क्षेत्रफल के हिसाब से सबसे बड़ा देश कौन सा है?", "Russia / रूस", "Canada / कनाडा"),
+                                    Triple("Who designed the Indian National Flag? / भारतीय राष्ट्रीय ध्वज का डिजाइन किसने किया था?", "Pingali Venkayya / पिंगली वेंकैया", "Rabindranath Tagore / रवींद्रनाथ टैगोर")
+                                )
+                                else -> listOf(
+                                    Triple("Identify the opposite of word 'Heavy'. / 'Heavy' (भारी) शब्द का विलोम क्या है?", "Light / हल्का", "Hard / कठिन"),
+                                    Triple("Identify proper noun in: 'Ramu is a boy'. / 'Ramu is a boy' में व्यक्तिवाचक संज्ञा शब्द क्या है?", "Ramu / रामू", "boy / लड़का"),
+                                    Triple("Choose the correct spelling / सही वर्तनी का चयन करें:", "Approve / स्वीकृत", "Aprove / स्वीकृत"),
+                                    Triple("What is the plural of 'Tooth'? / 'Tooth' का बहुवचन क्या है?", "Teeth / दांत", "Tooths / टूथ्स"),
+                                    Triple("Opposite of 'Rich' is / 'Rich' का विलोम शब्द है:", "Poor / गरीब", "Wealthy / अमीर")
+                                )
+                            }
+                            val indexCalc = (i + cls.hashCode()) % topics.size
+                            val selectedIdx = if (indexCalc < 0) indexCalc + topics.size else indexCalc
+                            val selected = topics[selectedIdx]
+                            questionText = "Class $cls $subjectEnum: ${selected.first}"
+                            optA = if (correctIdx == 0) selected.second else selected.third
+                            optB = if (correctIdx == 1) selected.second else "None of these / इनमें से कोई नहीं"
+                            optC = if (correctIdx == 2) selected.second else "All of the above / उपरोक्त सभी"
+                            optD = if (correctIdx == 3) selected.second else "Both / दोनों"
                         }
-                        
+
                         repository.insertQuestion(
                             QuestionEntity(
                                 testId = tId,
-                                questionText = qTxt,
-                                optionA = if (isMath) "${(22..198).random()}" else "Statement A is correct",
-                                optionB = if (isMath) "${(22..198).random()}" else "Statement B is correct",
-                                optionC = if (isMath) "${(22..198).random()}" else "Both A and B are wrong",
-                                optionD = if (isMath) "${(22..198).random()}" else "None of the above",
-                                correctIndex = (0..3).random()
+                                questionText = questionText,
+                                optionA = optA,
+                                optionB = optB,
+                                optionC = optC,
+                                optionD = optD,
+                                correctIndex = correctIdx
                             )
                         )
                     }
