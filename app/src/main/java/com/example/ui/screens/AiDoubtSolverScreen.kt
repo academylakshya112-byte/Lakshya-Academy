@@ -249,21 +249,7 @@ fun AiDoubtSolverScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(messages) { message ->
-                    ChatBubble(message) {
-                        if (!message.isUser) {
-                            sendMessage(
-                                text = "Please explain the previous answer visually. Use step-by-step illustrations, ASCII art, or flowcharts.",
-                                image = null,
-                                language = responseLanguage,
-                                viewModel = viewModel,
-                                scope = coroutineScope,
-                                tts = tts,
-                                onProcessing = { isProcessing = it }
-                            ) { msg ->
-                                messages = messages + msg
-                            }
-                        }
-                    }
+                    ChatBubble(message)
                 }
                 if (isProcessing) {
                     item {
@@ -486,8 +472,7 @@ private suspend fun solveDoubt(
             If Bilingual, provide the answer in clear English followed by a simple Hindi translation.
             Keep explanations easy to understand. 
             Use emojis to keep it engaging.
-            Never repeat words or sentences. Give a fresh response every time.
-            If the user asks for a 'video' or 'detailed explanation' or 'explain visually', format your response with clear step-by-step visual descriptions, including ASCII art diagrams, flowcharts, or structured visual steps.
+            If the user asks for a 'video' or 'detailed explanation', format your response with clear step-by-step visual descriptions, including ASCII art diagrams, flowcharts, or structured visual steps.
         """.trimIndent()
 
         val partList = mutableListOf<Part>()
@@ -588,7 +573,7 @@ private suspend fun solveDoubt(
 }
 
 @Composable
-fun ChatBubble(message: ChatMessage, onExplainVisually: (() -> Unit)? = null) {
+fun ChatBubble(message: ChatMessage) {
     val alignment = if (message.isUser) Alignment.End else Alignment.Start
     val bgColor = if (message.isUser) Color(0xFF6366F1) else Color.White
     val textColor = if (message.isUser) Color.White else Color.Black
@@ -644,19 +629,6 @@ fun ChatBubble(message: ChatMessage, onExplainVisually: (() -> Unit)? = null) {
                     fontSize = 15.sp,
                     lineHeight = 22.sp
                 )
-
-                if (!message.isUser && onExplainVisually != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    androidx.compose.material3.TextButton(
-                        onClick = { onExplainVisually() },
-                        modifier = Modifier.align(Alignment.End),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Icon(Icons.Default.PlayCircle, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Explain Visually", fontSize = 12.sp)
-                    }
-                }
             }
         }
         Text(
