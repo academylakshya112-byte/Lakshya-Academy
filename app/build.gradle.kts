@@ -64,6 +64,70 @@ android {
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
 // to match the convention used in Web projects.
+// Proactively generate .env from environment variables if present
+val envFile = rootProject.file(".env")
+var finalKey = ""
+
+// 1. Try reading from existing .env file
+if (envFile.exists()) {
+    val lines = envFile.readLines()
+    for (line in lines) {
+        val trimmed = line.trim()
+        if (trimmed.startsWith("GEMINI_API_KEY=")) {
+            val value = trimmed.substringAfter("GEMINI_API_KEY=").trim().removeSurrounding("\"").removeSurrounding("'").trim()
+            if (value.isNotBlank() && value != "YOUR_GEMINI_API_KEY") {
+                finalKey = value
+            }
+        } else if (trimmed.startsWith("MY_API_KEY=")) {
+            val value = trimmed.substringAfter("MY_API_KEY=").trim().removeSurrounding("\"").removeSurrounding("'").trim()
+            if (value.isNotBlank() && finalKey.isBlank()) {
+                finalKey = value
+            }
+        }
+    }
+}
+
+// 2. Try reading from environment variables (overrides or supplements .env)
+val envGemini = System.getenv("GEMINI_API_KEY") ?: ""
+val envMyKey = System.getenv("MY_API_KEY") ?: ""
+if (envGemini.isNotBlank() && envGemini != "YOUR_GEMINI_API_KEY") {
+    finalKey = envGemini.trim().removeSurrounding("\"").removeSurrounding("'").trim()
+} else if (envMyKey.isNotBlank() && finalKey.isBlank()) {
+    finalKey = envMyKey.trim().removeSurrounding("\"").removeSurrounding("'").trim()
+}
+
+// Ensure the final API key is set and cleaned
+finalKey = finalKey.trim().removeSurrounding("\"").removeSurrounding("'").trim()
+
+if (finalKey.isNotBlank() && finalKey != "YOUR_GEMINI_API_KEY") {
+    // Read other variables in existing .env to preserve them
+    val otherProperties = mutableMapOf<String, String>()
+    if (envFile.exists()) {
+        envFile.readLines().forEach { line ->
+            val trimmed = line.trim()
+            if (trimmed.contains("=") && !trimmed.startsWith("#")) {
+                val parts = trimmed.split("=", limit = 2)
+                val key = parts[0].trim()
+                val value = parts[1].trim()
+                if (key != "GEMINI_API_KEY") {
+                    otherProperties[key] = value
+                }
+            }
+        }
+    }
+    
+    // Write everything back, ensuring GEMINI_API_KEY is present
+    val sb = StringBuilder()
+    sb.append("GEMINI_API_KEY=$finalKey\n")
+    otherProperties.forEach { (k, v) ->
+        sb.append("$k=$v\n")
+    }
+    envFile.writeText(sb.toString())
+    logger.lifecycle("GEMINI DEBUG: Resolved GEMINI_API_KEY successfully. Key prefix: ${finalKey.take(4)}")
+} else {
+    logger.lifecycle("GEMINI DEBUG: GEMINI_API_KEY could not be resolved from environment or .env file.")
+}
+
 secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
@@ -101,6 +165,9 @@ dependencies {
   implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
   // implementation(libs.firebase.ai)
+  implementation(libs.firebase.auth)
+  implementation(libs.firebase.firestore)
+  implementation(libs.play.services.auth)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)

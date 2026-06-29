@@ -6,7 +6,7 @@ import com.squareup.moshi.JsonClass
 @JsonClass(generateAdapter = true)
 data class GenerateContentRequest(
     @Json(name = "contents") val contents: List<Content>,
-    @Json(name = "system_instruction") val systemInstruction: Content? = null
+    @Json(name = "systemInstruction") val systemInstruction: Content? = null
 )
 
 @JsonClass(generateAdapter = true)

@@ -54,7 +54,8 @@ fun Academic3x3GridDashboard(onTabSelect: (String) -> Unit) {
         Triple("My Progress", Icons.Default.Leaderboard, "DASHBOARD"),
         Triple("Free Books", Icons.Default.AutoStories, "books"),
         Triple("Time Table", Icons.Default.CalendarMonth, "timetable"),
-        Triple("AI Doubt Solver", Icons.Default.Psychology, "doubt_solver")
+        Triple("Lakshya AI 5.0 Ultra", Icons.Default.Psychology, "doubt_solver"),
+        Triple("Account (Auth)", Icons.Default.AccountCircle, "firebase_auth")
     )
 
     LazyVerticalGrid(

@@ -148,7 +148,8 @@ fun StudentMainContainer(viewModel: AcademyViewModel) {
                     )
                     "profile" -> StudentProfileView(viewModel = viewModel)
                     "TESTS" -> StudentTestHub(viewModel = viewModel)
-                    "doubt_solver" -> AiDoubtSolverScreen(viewModel = viewModel, onBack = { studentTab = "home" })
+                    "doubt_solver" -> LakshyaAiScreen(viewModel = viewModel, onBack = { studentTab = "home" })
+                    "firebase_auth" -> FirebaseLoginScreen(onBack = { studentTab = "home" })
                 }
             }
         }
