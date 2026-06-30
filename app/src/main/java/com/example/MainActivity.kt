@@ -16,6 +16,21 @@ import com.example.ui.viewmodel.AcademyViewModel
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    
+    // Proactively create WebView Code Cache directories to prevent Chromium from logging "No such file or directory" opendir errors.
+    try {
+      val jsDir = java.io.File(cacheDir, "WebView/Default/HTTP Cache/Code Cache/js")
+      val wasmDir = java.io.File(cacheDir, "WebView/Default/HTTP Cache/Code Cache/wasm")
+      if (!jsDir.exists()) {
+        jsDir.mkdirs()
+      }
+      if (!wasmDir.exists()) {
+        wasmDir.mkdirs()
+      }
+    } catch (e: Exception) {
+      android.util.Log.e("WebViewSetup", "Error creating WebView cache dirs: ${e.message}")
+    }
+
     enableEdgeToEdge()
     setContent {
       val viewModel: AcademyViewModel = viewModel()

@@ -74,7 +74,6 @@ fun AdminCourseManager(viewModel: AcademyViewModel) {
             }
             selectedVideoUri = it
             selectedVideoName = getFileNameFromUri(context, it)
-            videoLinkInput = it.toString()
         }
     }
 
@@ -477,7 +476,49 @@ fun AdminCourseManager(viewModel: AcademyViewModel) {
                                 Spacer(modifier = Modifier.height(16.dp))
                                 Button(
                                     onClick = {
-                                        if (chapName.isBlank() || lessonTitle.isBlank()) {
+                                        val finalVideoLink = if (selectedVideoUri != null) selectedVideoUri.toString() else videoLinkInput.trim()
+                                        var isValid = true
+                                        var validationError = ""
+                                        if (selectedVideoUri == null && videoLinkInput.isNotBlank()) {
+                                            val url = videoLinkInput.trim()
+                                            if (url.startsWith("content://") || url.startsWith("file://")) {
+                                                isValid = false
+                                                validationError = "Local content URI not allowed in Web URL. Please use the 'Pick Video from Phone' button below."
+                                            } else if (!url.startsWith("https://") && !url.startsWith("http://")) {
+                                                isValid = false
+                                                validationError = "Web Video URL must start with https://"
+                                            } else {
+                                                val detected = detectVideoSourceType(url)
+                                                when (detected) {
+                                                    "YOUTUBE" -> {
+                                                        if (extractYouTubeVideoId(url) == null) {
+                                                            isValid = false
+                                                            validationError = "Invalid YouTube URL"
+                                                        }
+                                                    }
+                                                    "GOOGLE_DRIVE" -> {
+                                                        val converted = convertDriveUrl(url)
+                                                        if (converted == url) {
+                                                            isValid = false
+                                                            validationError = "Drive link not public"
+                                                        }
+                                                    }
+                                                    "MP4" -> {
+                                                        if (!url.contains(".mp4") && !url.contains("mov_bbb") && !url.contains("movie.mp4") && !url.contains("stream") && !url.contains("w3schools")) {
+                                                            isValid = false
+                                                            validationError = "Invalid MP4"
+                                                        }
+                                                    }
+                                                     else -> {
+                                                         isValid = false
+                                                         validationError = "Unsupported URL"
+                                                     }
+                                                }
+                                            }
+                                        }
+                                        if (!isValid) {
+                                            Toast.makeText(context, validationError, Toast.LENGTH_LONG).show()
+                                        } else if (chapName.isBlank() || lessonTitle.isBlank()) {
                                             Toast.makeText(context, "Please enter both Chapter Title and Lesson Name!", Toast.LENGTH_SHORT).show()
                                         } else {
                                             viewModel.adminAddLessonToCourse(
@@ -485,7 +526,7 @@ fun AdminCourseManager(viewModel: AcademyViewModel) {
                                                 chapter = chapName,
                                                 folder = folderName,
                                                 title = lessonTitle,
-                                                videoLink = sanitizeVideoUrl(videoLinkInput),
+                                                videoLink = if (selectedVideoUri != null) selectedVideoUri.toString() else videoLinkInput.trim(),
                                                 pdfLink = if (selectedPdfUri != null) selectedPdfUri.toString() else (if (pdfNameInput.isNotBlank()) "${pdfNameInput.trim()}.pdf" else "Class_Handout.pdf"),
                                                 pdfName = if (pdfNameInput.isNotBlank()) pdfNameInput.trim() else "Study notes compilation",
                                                 pdfContent = if (pdfContentInput.isNotBlank()) pdfContentInput.trim() else (if (selectedPdfName.isNotBlank()) "Loaded Local PDF Notes: $selectedPdfName" else ""),

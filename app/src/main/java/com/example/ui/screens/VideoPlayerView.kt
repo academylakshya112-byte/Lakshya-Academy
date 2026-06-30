@@ -26,54 +26,258 @@ import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.style.TextAlign
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import android.webkit.WebView
+import android.view.ViewGroup
 import com.example.data.LessonEntity
+import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.YouTubePlayer as PierYouTubePlayer
+import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.listeners.AbstractYouTubePlayerListener
+import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.options.IFramePlayerOptions
+import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.views.YouTubePlayerView
 
 @OptIn(UnstableApi::class)
 @Composable
 fun VideoPlayerView(
     lesson: LessonEntity,
     onFullScreenToggle: (Boolean) -> Unit = {},
-    isFullScreen: Boolean = false
+    isFullScreen: Boolean = false,
+    isAdmin: Boolean = false
 ) {
     val context = LocalContext.current
-    val isYouTube = remember(lesson.videoUrl) {
-        lesson.videoUrl.contains("youtube.com") || lesson.videoUrl.contains("youtu.be")
+    val finalSourceType = remember(lesson.videoSourceType, lesson.videoUrl) {
+        if (lesson.videoSourceType == "LOCAL" || lesson.videoUrl.startsWith("content://") || lesson.videoUrl.startsWith("file://")) {
+            "LOCAL"
+        } else {
+            detectVideoSourceType(lesson.videoUrl)
+        }
     }
 
-    if (isYouTube) {
-        YouTubePlayer(lesson.videoUrl, modifier = if (isFullScreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth().aspectRatio(16/9f))
+    LaunchedEffect(lesson) {
+        android.util.Log.d("VideoSystem", "=== PLAYER LOAD LOGS ===")
+        android.util.Log.d("VideoSystem", "Lesson Clicked: ${lesson.title}")
+        android.util.Log.d("VideoSystem", "VideoSourceType: $finalSourceType")
+        android.util.Log.d("VideoSystem", "YouTube URL: ${lesson.videoUrl}")
+        
+        val vidId = extractYouTubeVideoId(lesson.videoUrl) ?: "N/A"
+        android.util.Log.d("VideoSystem", "Extracted Video ID: $vidId")
+        
+        if (finalSourceType == "YOUTUBE") {
+            android.util.Log.d("VideoSystem", "Player Initialization Started for Video ID: $vidId")
+        }
+        
+        if (finalSourceType == "GOOGLE_DRIVE") {
+            val convUrl = convertDriveUrl(lesson.videoUrl)
+            android.util.Log.d("VideoSystem", "Converted Drive URL: $convUrl")
+        }
+        android.util.Log.d("VideoSystem", "=========================")
+    }
+
+    if (finalSourceType == "LOCAL") {
+        if (isAdmin) {
+            StandardVideoPlayer(lesson, onFullScreenToggle, isFullScreen)
+        } else {
+            Box(
+                modifier = if (isFullScreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth().aspectRatio(16/9f).background(Color.Black),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
+                    Icon(Icons.Default.Lock, contentDescription = null, tint = Color.Red, modifier = Modifier.size(48.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Local Preview Only Available on Admin Device",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        text = "Students can only stream from web sources (YouTube/Drive).",
+                        color = Color.Gray,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+    } else if (finalSourceType == "YOUTUBE") {
+        val videoId = if (lesson.youtubeVideoId.isNotEmpty()) {
+            lesson.youtubeVideoId
+        } else {
+            extractYouTubeVideoId(lesson.videoUrl) ?: ""
+        }
+        YouTubePlayer(videoId, modifier = if (isFullScreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth().aspectRatio(16/9f))
+    } else if (finalSourceType == "GOOGLE_DRIVE") {
+        val convertedUrl = convertDriveUrl(lesson.videoUrl)
+        val convertedLesson = lesson.copy(videoUrl = convertedUrl)
+        StandardVideoPlayer(convertedLesson, onFullScreenToggle, isFullScreen)
     } else {
         StandardVideoPlayer(lesson, onFullScreenToggle, isFullScreen)
     }
 }
 
 @Composable
-fun YouTubePlayer(url: String, modifier: Modifier) {
-    val videoId = remember(url) {
-        if (url.contains("v=")) url.substringAfter("v=").substringBefore("&")
-        else if (url.contains("youtu.be/")) url.substringAfter("youtu.be/").substringBefore("?")
-        else ""
-    }
-    val embedUrl = "https://www.youtube.com/embed/$videoId"
+fun YouTubePlayer(videoId: String, modifier: Modifier) {
+    val context = LocalContext.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    
+    val videoIdToLoad = videoId.trim()
+    var isLoading by remember { mutableStateOf(true) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+    var playerInstance by remember { mutableStateOf<PierYouTubePlayer?>(null) }
+    var reloadTrigger by remember { mutableIntStateOf(0) }
+    var lastLoadedId by remember { mutableStateOf<String?>(null) }
 
-    AndroidView(
-        factory = { ctx ->
-            android.webkit.WebView(ctx).apply {
-                settings.javaScriptEnabled = true
-                settings.loadWithOverviewMode = true
-                settings.useWideViewPort = true
-                webViewClient = android.webkit.WebViewClient()
-                loadUrl(embedUrl)
+    LaunchedEffect(videoIdToLoad, playerInstance) {
+        if (videoIdToLoad.isNotEmpty() && playerInstance != null) {
+            if (videoIdToLoad != lastLoadedId) {
+                android.util.Log.d("YT_DEBUG", "LaunchedEffect: loadVideo($videoIdToLoad)")
+                playerInstance?.loadVideo(videoIdToLoad, 0f)
+                lastLoadedId = videoIdToLoad
             }
-        },
-        modifier = modifier
-    )
+        }
+    }
+
+    Box(modifier = modifier.background(Color.Black), contentAlignment = Alignment.Center) {
+        key(reloadTrigger) {
+            AndroidView(
+                factory = { ctx ->
+                    val playerView = YouTubePlayerView(ctx)
+                    playerView.enableAutomaticInitialization = false
+                    
+                    val options = IFramePlayerOptions.Builder()
+                        .controls(1)
+                        .autoplay(1)
+                        .rel(0)
+                        .modestBranding(0)
+                        .build()
+
+                    playerView.initialize(object : AbstractYouTubePlayerListener() {
+                        override fun onReady(youTubePlayer: PierYouTubePlayer) {
+                            android.util.Log.i("YT_DEBUG", "onReady: ID $videoIdToLoad")
+                            playerInstance = youTubePlayer
+                            isLoading = false
+                            
+                            // WebView diagnostics and configuration
+                            try {
+                                val wv = findWebView(playerView)
+                                wv?.let {
+                                    it.settings.javaScriptEnabled = true
+                                    it.settings.domStorageEnabled = true
+                                    it.settings.databaseEnabled = true
+                                    it.settings.mediaPlaybackRequiresUserGesture = false
+                                    // Set a standard user agent
+                                    it.settings.userAgentString = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36"
+                                    
+                                    it.webChromeClient = object : android.webkit.WebChromeClient() {
+                                        override fun onConsoleMessage(msg: android.webkit.ConsoleMessage?): Boolean {
+                                            android.util.Log.d("YT_CONSOLE", "[${msg?.messageLevel()}] ${msg?.message()} (${msg?.sourceId()}:${msg?.lineNumber()})")
+                                            return true
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.e("YT_DEBUG", "WebView setup failed", e)
+                            }
+
+                            if (videoIdToLoad != lastLoadedId) {
+                                youTubePlayer.loadVideo(videoIdToLoad, 0f)
+                                lastLoadedId = videoIdToLoad
+                            }
+                        }
+
+                        override fun onError(youTubePlayer: PierYouTubePlayer, error: com.pierfrancescosoffritti.androidyoutubeplayer.core.player.PlayerConstants.PlayerError) {
+                            isLoading = false
+                            val errorName = error.name
+                            val errorCode = error.ordinal
+                            errorMsg = "YouTube Error: $errorName (Ordinal: $errorCode). Library: 12.1.0"
+                            android.util.Log.e("YT_DEBUG", "onError: $errorName ($errorCode) for video $videoIdToLoad")
+                        }
+                    }, options)
+
+                    lifecycleOwner.lifecycle.addObserver(playerView)
+                    playerView
+                },
+                modifier = Modifier.fillMaxSize(),
+                onRelease = { view ->
+                    lifecycleOwner.lifecycle.removeObserver(view)
+                    view.release()
+                }
+            )
+        }
+
+        if (isLoading) {
+            CircularProgressIndicator(color = Color.Red)
+        }
+
+        errorMsg?.let { msg ->
+            Column(
+                modifier = Modifier.fillMaxSize().background(Color.Black).padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(Icons.Default.Error, contentDescription = null, tint = Color.Red, modifier = Modifier.size(48.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(msg, color = Color.White, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Video ID: $videoIdToLoad", color = Color.Gray, fontSize = 10.sp)
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            errorMsg = null
+                            isLoading = true
+                            playerInstance?.loadVideo(videoIdToLoad, 0f)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                    ) {
+                        Text("Retry")
+                    }
+                    Button(
+                        onClick = {
+                            errorMsg = null
+                            isLoading = true
+                            playerInstance = null
+                            lastLoadedId = null
+                            reloadTrigger++
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)
+                    ) {
+                        Text("Hard Reload")
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun tweakWebView(playerView: YouTubePlayerView) {
+    try {
+        val webView = findWebView(playerView)
+        webView?.let { wv ->
+            wv.settings.javaScriptEnabled = true
+            wv.settings.domStorageEnabled = true
+            wv.settings.databaseEnabled = true
+            wv.settings.mediaPlaybackRequiresUserGesture = false
+            wv.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+        }
+    } catch (e: Exception) {
+        android.util.Log.e("YT_DEBUG", "WebView tweak failed", e)
+    }
+}
+
+private fun findWebView(view: android.view.View): WebView? {
+    if (view is WebView) return view
+    if (view is ViewGroup) {
+        for (i in 0 until view.childCount) {
+            val child = findWebView(view.getChildAt(i))
+            if (child != null) return child
+        }
+    }
+    return null
 }
 
 @OptIn(UnstableApi::class)

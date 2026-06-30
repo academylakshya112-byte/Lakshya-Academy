@@ -370,7 +370,8 @@ fun StudentLessonsMediaWorkspace(course: CourseEntity, completedCount: Int, view
                             VideoPlayerView(
                                 lesson = currentScreen.lesson, 
                                 isFullScreen = isFullScreen,
-                                onFullScreenToggle = { isFullScreen = it }
+                                onFullScreenToggle = { isFullScreen = it },
+                                isAdmin = (viewModel.currentUser?.role == "ADMIN")
                             )
                             if (!isFullScreen) {
                                 Column(modifier = Modifier.padding(16.dp)) {

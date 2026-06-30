@@ -39,8 +39,10 @@ roborazzi = "1.59.0"
 firebaseBom = "34.12.0"
 media3 = "1.5.1"
 secretsGradlePlugin = "2.0.1"
+androidYoutubePlayer = "12.1.0"
 
 [libraries]
+android-youtube-player-core = { group = "com.pierfrancescosoffritti.androidyoutubeplayer", name = "core", version.ref = "androidYoutubePlayer" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }

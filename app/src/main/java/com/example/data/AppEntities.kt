@@ -28,7 +28,9 @@ data class LessonEntity(
     val pdfName: String,
     val pdfContent: String = "",
     val fileSize: String = "2.5 MB",
-    val thumbnailUrl: String = ""
+    val thumbnailUrl: String = "",
+    val videoSourceType: String = "YOUTUBE",
+    val youtubeVideoId: String = ""
 )
 
 @Entity(tableName = "enrollments")

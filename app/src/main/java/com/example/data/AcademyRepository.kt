@@ -25,7 +25,30 @@ class AcademyRepository(private val academyDao: AcademyDao) {
     }
 
     suspend fun insertLesson(lesson: LessonEntity) {
-        academyDao.insertLesson(lesson)
+        val resolvedSourceType = com.example.ui.screens.detectVideoSourceType(lesson.videoUrl)
+        var finalLesson = lesson.copy(videoSourceType = resolvedSourceType)
+        
+        if (resolvedSourceType == "YOUTUBE") {
+            val extractedId = com.example.ui.screens.extractYouTubeVideoId(lesson.videoUrl) ?: ""
+            val generatedThumbnail = if (extractedId.isNotEmpty()) "https://img.youtube.com/vi/$extractedId/hqdefault.jpg" else lesson.thumbnailUrl
+            finalLesson = finalLesson.copy(
+                youtubeVideoId = extractedId,
+                thumbnailUrl = if (lesson.thumbnailUrl.isBlank() || lesson.thumbnailUrl.startsWith("http://") || lesson.thumbnailUrl.startsWith("https://picsum") || lesson.thumbnailUrl == "") generatedThumbnail else lesson.thumbnailUrl
+            )
+        }
+        
+        android.util.Log.d("VideoSystem", "=== REPOSITORY INSERT LOGS ===")
+        android.util.Log.d("VideoSystem", "Selected Source URL: ${finalLesson.videoUrl}")
+        android.util.Log.d("VideoSystem", "Detected Type: ${finalLesson.videoSourceType}")
+        android.util.Log.d("VideoSystem", "Extracted Video ID: ${finalLesson.youtubeVideoId}")
+        android.util.Log.d("VideoSystem", "Saved Thumbnail: ${finalLesson.thumbnailUrl}")
+        if (finalLesson.videoSourceType == "GOOGLE_DRIVE") {
+            val convUrl = com.example.ui.screens.convertDriveUrl(finalLesson.videoUrl)
+            android.util.Log.d("VideoSystem", "Converted Drive URL: $convUrl")
+        }
+        android.util.Log.d("VideoSystem", "==============================")
+
+        academyDao.insertLesson(finalLesson)
     }
 
     suspend fun deleteLesson(id: Int) {

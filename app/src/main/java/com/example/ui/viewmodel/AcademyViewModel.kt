@@ -10,6 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
 import com.example.data.*
+import com.example.ui.screens.extractYouTubeVideoId
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Types
@@ -333,11 +334,76 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 seedDatabaseIfEmpty()
+                updateClass7Video()
+                updateClass9Video()
                 forceReSeedTestsIfNeeded()
                 observeMaterials()
             } catch (e: Exception) {
                 android.util.Log.e("AcademyViewModel", "Error in startup tasks: ${e.message}")
             }
+        }
+    }
+
+    private suspend fun updateClass7Video() {
+        try {
+            val courses = repository.allCourses.first()
+            val class7Course = courses.find { it.category == "Class 7" }
+            if (class7Course != null) {
+                val lessons = repository.getLessonsForCourse(class7Course.id).first()
+                val targetUrl = "https://youtu.be/EWAI1fi3k7Y"
+                val targetVideoId = extractYouTubeVideoId(targetUrl) ?: ""
+                
+                // Update any lesson in Class 7 that doesn't have the new URL yet
+                // Or specifically target the one with the placeholder w3schools URL
+                val staleLesson = lessons.find { 
+                    it.videoUrl == "https://www.w3schools.com/html/mov_bbb.mp4" || 
+                    (it.title == "Chapter 3: The Delhi Sultans Summary" && it.videoUrl != targetUrl)
+                }
+                
+                if (staleLesson != null) {
+                    android.util.Log.d("VideoSystem", "Updating Class 7 lesson ${staleLesson.id} to new YouTube URL")
+                    repository.insertLesson(
+                        staleLesson.copy(
+                            videoUrl = targetUrl,
+                            youtubeVideoId = targetVideoId,
+                            thumbnailUrl = "" // Trigger re-generation
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("VideoSystem", "Error in updateClass7Video: ${e.message}")
+        }
+    }
+
+    private suspend fun updateClass9Video() {
+        try {
+            val courses = repository.allCourses.first()
+            val class9Course = courses.find { it.category == "Class 9" }
+            if (class9Course != null) {
+                val lessons = repository.getLessonsForCourse(class9Course.id).first()
+                val targetUrl = "https://youtu.be/0JT9Y7_hV0k?si=oTUMMfpEJjRiTyrH"
+                val targetVideoId = "0JT9Y7_hV0k"
+                
+                // Find the specific lesson targeting Class 9 Physics/Motion
+                val targetLesson = lessons.find { 
+                    (it.videoUrl != targetUrl) && 
+                    (it.title.contains("Motion") || it.videoUrl == "https://www.w3schools.com/html/mov_bbb.mp4")
+                }
+                
+                if (targetLesson != null) {
+                    android.util.Log.d("VideoSystem", "Updating Class 9 lesson ${targetLesson.id} to: $targetUrl")
+                    repository.insertLesson(
+                        targetLesson.copy(
+                            videoUrl = targetUrl,
+                            youtubeVideoId = targetVideoId,
+                            thumbnailUrl = "" // repository.insertLesson will re-generate based on new ID
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("VideoSystem", "Error in updateClass9Video: ${e.message}")
         }
     }
 
@@ -812,7 +878,7 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                     courseId = c7Id,
                     chapterName = "History - Delhi Sultans",
                     title = "Chapter 3: The Delhi Sultans Summary",
-                    videoUrl = "https://www.w3schools.com/html/mov_bbb.mp4",
+                    videoUrl = "https://youtu.be/EWAI1fi3k7Y",
                     pdfUrl = "Class7_History_Ch3.pdf",
                     pdfName = "The Delhi Sultans Revision Notes"
                 )
@@ -834,7 +900,8 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                     courseId = c9Id,
                     chapterName = "Physics - Motion",
                     title = "Chapter 8: Laws of Motion & Graphs",
-                    videoUrl = "https://www.w3schools.com/html/mov_bbb.mp4",
+                    videoUrl = "https://youtu.be/0JT9Y7_hV0k?si=oTUMMfpEJjRiTyrH",
+                    youtubeVideoId = "0JT9Y7_hV0k",
                     pdfUrl = "Class9_Physics_Motion.pdf",
                     pdfName = "Equations of Motion Graphical Derivations"
                 )
@@ -1626,18 +1693,22 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         if (currentUser?.role != "ADMIN") return
         if (chapter.isBlank() || title.isBlank()) return
         viewModelScope.launch {
+            val finalVideoUrl = if (videoLink.isBlank()) "https://www.w3schools.com/html/mov_bbb.mp4" else videoLink.trim()
+            val finalSourceType = com.example.ui.screens.detectVideoSourceType(finalVideoUrl)
+            
             repository.insertLesson(
                 LessonEntity(
                     courseId = courseId,
                     chapterName = chapter.trim(),
                     folder = folder.trim(),
                     title = title.trim(),
-                    videoUrl = if (videoLink.isBlank()) "https://www.w3schools.com/html/mov_bbb.mp4" else videoLink.trim(),
+                    videoUrl = finalVideoUrl,
                     pdfUrl = if (pdfLink.isBlank()) "Class_Handout.pdf" else pdfLink.trim(),
                     pdfName = if (pdfName.isBlank()) "Study notes compilation" else pdfName.trim(),
                     pdfContent = pdfContent.trim(),
                     fileSize = if (fileSize.isBlank()) "2.5 MB" else fileSize.trim(),
-                    thumbnailUrl = thumbnailUrl.trim()
+                    thumbnailUrl = thumbnailUrl.trim(),
+                    videoSourceType = finalSourceType
                 )
             )
             val currentCourse = allCourses.value.find { it.id == courseId }

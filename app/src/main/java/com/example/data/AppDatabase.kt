@@ -164,7 +164,7 @@ interface AcademyDao {
         AiAnimationLimitEntity::class,
         AiVideoLimitEntity::class
     ],
-    version = 9,
+    version = 11,
     exportSchema = false
 )
 abstract class AcademyDatabase : RoomDatabase() {
