@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -27,6 +28,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.CourseEntity
+import com.example.api.R2SupabaseManager
+import com.example.api.SupabaseVideo
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.AcademyViewModel
 
@@ -36,12 +39,74 @@ fun StudentHomeDashboard(
     onTabSelect: (String) -> Unit,
     onPlayCourse: (CourseEntity) -> Unit
 ) {
+    val enrollments by viewModel.allEnrollments.collectAsStateWithLifecycle()
     val courses by viewModel.allCourses.collectAsStateWithLifecycle()
     val banners by viewModel.allBanners.collectAsStateWithLifecycle()
     val studentName = viewModel.currentUser?.name ?: "Learner"
+    val userEmail = viewModel.currentUser?.email ?: ""
+
+    var supabaseVideos by remember { mutableStateOf<List<SupabaseVideo>>(emptyList()) }
+    val context = LocalContext.current
+    LaunchedEffect(Unit) {
+        viewModel.syncFromRemote()
+        R2SupabaseManager.fetchVideos(context) { list, error ->
+            if (error == null && list != null) {
+                supabaseVideos = list
+            }
+        }
+    }
+
+    val activeAndSortedBanners = remember(banners) {
+        banners.filter { it.isActive }.sortedBy { it.displayOrder }
+    }
+
+    val r2Batches = remember(supabaseVideos) {
+        supabaseVideos
+            .map { it.classText.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+    }
+
+    val combinedCourses = remember(courses, r2Batches, supabaseVideos) {
+        val list = mutableListOf<CourseEntity>()
+        
+        // Add real courses directly, no fallback
+        list.addAll(courses)
+        
+        // Add virtual courses if they don't exist
+        for (batchName in r2Batches) {
+            val exists = list.any { 
+                java.text.Normalizer.normalize(it.title, java.text.Normalizer.Form.NFC).lowercase()
+                    .replace(Regex("[^\\p{L}\\p{N}]"), "").trim() == 
+                java.text.Normalizer.normalize(batchName, java.text.Normalizer.Form.NFC).lowercase()
+                    .replace(Regex("[^\\p{L}\\p{N}]"), "").trim()
+            }
+            if (!exists) {
+                val sampleVideo = supabaseVideos.firstOrNull { 
+                    it.classText.trim().equals(batchName, ignoreCase = true) 
+                }
+                val category = sampleVideo?.subject ?: "R2 Lectures"
+                val virtualId = -(batchName.hashCode().coerceAtLeast(1))
+                list.add(
+                    CourseEntity(
+                        id = virtualId,
+                        title = batchName,
+                        category = category,
+                        subject = sampleVideo?.subject ?: "R2 Lectures",
+                        description = sampleVideo?.description ?: "Dynamic video lectures and PDF study materials for $batchName.",
+                        isFree = true,
+                        price = 0.0,
+                        totalLessons = supabaseVideos.count { it.classText.trim().equals(batchName, ignoreCase = true) },
+                        imageUrl = ""
+                    )
+                )
+            }
+        }
+        list
+    }
 
     var searchQuery by remember { mutableStateOf("") }
-    val filteredCourses = if (searchQuery.isBlank()) courses else courses.filter {
+    val filteredCourses = if (searchQuery.isBlank()) combinedCourses else combinedCourses.filter {
         it.title.contains(searchQuery, ignoreCase = true) || it.category.contains(searchQuery, ignoreCase = true)
     }
 
@@ -54,7 +119,16 @@ fun StudentHomeDashboard(
     ) {
         item {
             DashboardBrandHeader(studentName = studentName)
-            BannerCarousel(banners = banners, onTabSelect = onTabSelect)
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Official Announcements (महत्वपूर्ण सूचना पट्ट)",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            BannerCarousel(banners = activeAndSortedBanners, onTabSelect = onTabSelect)
             Spacer(modifier = Modifier.height(16.dp))
             OutlinedTextField(
                 value = searchQuery,
@@ -75,8 +149,9 @@ fun StudentHomeDashboard(
                 }
             })
             
+            Spacer(modifier = Modifier.height(8.dp))
             // Motivation Tag
-            Box(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), contentAlignment = Alignment.Center) {
                 Text(
                     "👑 Mere Boss Rahul Bhai | Future Army Boy 🪖",
                     fontSize = 11.sp,
@@ -86,19 +161,25 @@ fun StudentHomeDashboard(
                 )
             }
             
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             SectionHeader(title = "Active Enrollment Batches (सक्रिय बैच)")
         }
 
         if (filteredCourses.isEmpty()) {
             item {
                 Box(modifier = Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
-                    Text("No matching batches found.", color = Color.Gray)
+                    Text("No batches available.", color = Color.Gray, fontWeight = FontWeight.Bold)
                 }
             }
         } else {
             items(filteredCourses) { course ->
-                CourseCard(course = course, onClick = { selectedCourseForDetail = course })
+                val isEnrolled = course.id < 0 || enrollments.any { it.userEmail == userEmail && it.courseId == course.id }
+                CourseCard(
+                    course = course,
+                    isEnrolled = isEnrolled,
+                    onPlayClick = { onPlayCourse(course) },
+                    onEnrollClick = { selectedCourseForDetail = course }
+                )
             }
         }
     }
@@ -122,11 +203,46 @@ fun StudentHomeDashboard(
 }
 
 @Composable
-fun CourseCard(course: CourseEntity, onClick: () -> Unit) {
+fun CourseCard(
+    course: CourseEntity,
+    isEnrolled: Boolean,
+    onPlayClick: () -> Unit,
+    onEnrollClick: () -> Unit
+) {
     var isFavorite by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val displayImageUrl = remember(course.imageUrl, course.id, course.title) {
+        when {
+            course.id == 7 || course.title.contains("AIRFORCE", ignoreCase = true) -> {
+                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/lms_1783610971221.jpg"
+            }
+            course.id == 10 || course.title.contains("9th Class", ignoreCase = true) || course.title.contains("9th", ignoreCase = true) -> {
+                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/WhatsApp%20Image%202026-07-11%20at%202.03.25%20PM.jpeg"
+            }
+            course.id == 11 || course.title.contains("12th", ignoreCase = true) -> {
+                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/12TH%20.jpeg"
+            }
+            course.id == 12 || course.title.contains("10th Class", ignoreCase = true) || course.title.contains("10th", ignoreCase = true) -> {
+                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/10TH%20.png"
+            }
+            course.id == 6 || course.title.contains("Toppers Batch", ignoreCase = true) || course.title.contains("PCB 11th Class", ignoreCase = true) -> {
+                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/lms_1783656408082.jpg"
+            }
+            else -> course.imageUrl
+        }
+    }
 
     Card(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp)
+            .clickable {
+                if (isEnrolled) {
+                    onPlayClick()
+                } else {
+                    onEnrollClick()
+                }
+            },
         shape = RoundedCornerShape(12.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -152,7 +268,6 @@ fun CourseCard(course: CourseEntity, onClick: () -> Unit) {
                     Icon(
                         imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                         contentDescription = null,
-                        tint = if (isFavorite) Color.Red else Color.Gray,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -162,38 +277,53 @@ fun CourseCard(course: CourseEntity, onClick: () -> Unit) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(170.dp)
+                    .height(180.dp)
                     .padding(horizontal = 12.dp)
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(12.dp))
                     .background(Color(0xFFF1F5F9))
             ) {
-                if (course.imageUrl.isNotBlank()) {
+                if (displayImageUrl.isNotBlank()) {
                     AsyncImage(
-                        model = course.imageUrl,
-                        contentDescription = null,
+                        model = displayImageUrl,
+                        contentDescription = "Batch Cover",
                         modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
+                        contentScale = ContentScale.Crop,
+                        onState = { state ->
+                            if (state is coil.compose.AsyncImagePainter.State.Error) {
+                                android.util.Log.e("CourseCard", "[IMAGE ERROR] Failed to load: $displayImageUrl", state.result.throwable)
+                            }
+                        }
                     )
                 } else {
-                    Icon(
-                        Icons.Default.School,
-                        null,
-                        modifier = Modifier.align(Alignment.Center).size(48.dp),
-                        tint = Color.LightGray
-                    )
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Default.School,
+                                null,
+                                modifier = Modifier.size(48.dp),
+                                tint = Color.LightGray
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("No Cover Image", fontSize = 10.sp, color = Color.LightGray)
+                        }
+                    }
                 }
                 
                 // Overlay Badge for Category
                 Surface(
-                    modifier = Modifier.padding(8.dp).align(Alignment.TopStart),
-                    color = Color.Black.copy(alpha = 0.6f),
-                    shape = RoundedCornerShape(4.dp)
+                    modifier = Modifier.padding(12.dp).align(Alignment.TopStart),
+                    color = Color.Black.copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(6.dp)
                 ) {
                     Text(
-                        course.category,
+                        course.category.uppercase(),
                         color = Color.White,
                         fontSize = 10.sp,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
             }
@@ -215,13 +345,26 @@ fun CourseCard(course: CourseEntity, onClick: () -> Unit) {
                 }
                 
                 Button(
-                    onClick = onClick,
+                    onClick = {
+                        if (isEnrolled) {
+                            onPlayClick()
+                        } else {
+                            onEnrollClick()
+                        }
+                    },
                     modifier = Modifier.height(40.dp),
                     shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1)),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isEnrolled) Color(0xFF10B981) else Color(0xFF6366F1)
+                    ),
                     contentPadding = PaddingValues(horizontal = 16.dp)
                 ) {
-                    Text("Let's Study", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text(
+                        text = if (isEnrolled) "Continue Learning" else "Enroll Now",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
                 }
             }
         }
@@ -294,3 +437,5 @@ fun StudentMyCourses(
         }
     }
 }
+
+

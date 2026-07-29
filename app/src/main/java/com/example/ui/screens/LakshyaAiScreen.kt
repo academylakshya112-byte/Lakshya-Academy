@@ -69,6 +69,165 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.util.*
 
+fun sanitizeForDisplay(text: String): String {
+    if (text.isBlank()) return ""
+    
+    var clean = text
+    
+    // 1. Remove triple-backticks/ticks but preserve the layout/text
+    clean = clean.replace("```", "")
+    clean = clean.replace("`", "")
+    
+    // 2. Remove Header symbols (#, ##, ###, etc.) at the start of any line
+    clean = clean.replace(Regex("(?m)^\\s*#+\\s*"), "")
+    
+    // 3. Remove markdown blockquotes at the start of any line (e.g. "> text" -> "text")
+    clean = clean.replace(Regex("(?m)^\\s*>+\\s*"), "")
+    
+    // 4. Strip bold-italic / bold / italic markers from text completely
+    clean = clean.replace(Regex("\\*\\*\\*([^*]+)\\*\\*\\*"), "$1")
+    clean = clean.replace(Regex("\\*\\*([^*]+)\\*\\*"), "$1")
+    clean = clean.replace(Regex("\\*([^*]+)\\*"), "$1")
+    
+    // 5. Strip underscore bold / italic markers
+    clean = clean.replace(Regex("(?<![a-zA-Z0-9])___([^_]+)___(?![a-zA-Z0-9])"), "$1")
+    clean = clean.replace(Regex("(?<![a-zA-Z0-9])__([^_]+)__(?![a-zA-Z0-9])"), "$1")
+    clean = clean.replace(Regex("(?<![a-zA-Z0-9])_([^_]+)_(?![a-zA-Z0-9])"), "$1")
+    
+    // 6. Clean link syntax [text](url) -> "text"
+    clean = clean.replace(Regex("\\[([^\\]]+)\\]\\(([^)]+)\\)"), "$1")
+    
+    // 7. Clean up empty parentheses/brackets that might remain from broken markdown
+    clean = clean.replace("[]", "")
+    clean = clean.replace("()", "")
+    
+    // 8. Replace standard markdown bullet point markers with a consistent premium bullet character
+    clean = clean.replace(Regex("(?m)^\\s*[-*+•]\\s*"), "• ")
+    
+    // 9. Clean trailing or leading asterisks/garbage from lines
+    clean = clean.replace(Regex("(?m)\\s*\\*+\\s*$"), "")
+    
+    // 10. Remove duplicate list markers like "• •" or "• *"
+    clean = clean.replace(Regex("•\\s*[•*+-]\\s*"), "• ")
+    
+    // 11. Clean up standalone unwanted characters like isolated @, ₹, ^, ~, |
+    // Be very careful to preserve math context by only matching non-alphanumeric boundaries
+    clean = clean.replace(Regex("(?<![a-zA-Z0-9])[@~^|\\\\](?![a-zA-Z0-9])"), " ")
+    
+    // 12. Remove duplicate periods/punctuation but preserve standard ellipses like ... or correct characters
+    clean = clean.replace(Regex("(?<!\\.)\\.{2}(?!\\.)"), ".") // exact 2 periods -> 1 period
+    clean = clean.replace(Regex("(?<!\\.)\\.{4,}(?!\\.)"), "...") // 4 or more periods -> 3 periods
+    clean = clean.replace(Regex("([,!?;])\\1+"), "$1")
+    
+    // 13. Collapse multiple blank lines (3 or more) to exactly 2 newlines (double newline is standard for paragraph separation)
+    clean = clean.replace(Regex("\n{3,}"), "\n\n")
+    
+    // 14. Remove common formatting leftover garbage strings
+    clean = clean
+        .replace("~~~", "")
+        .replace("*****", "")
+        .replace("####", "")
+        .replace("@@@@", "")
+        .replace("%%%%", "")
+        .replace(Regex("(?m)^\\s*[-*_~=]{3,}\\s*$"), "") // Horizontal markdown dividers
+    
+    return clean.trim()
+}
+
+fun sanitizeForSpeech(text: String): String {
+    if (text.isBlank()) return ""
+    
+    // Remove markdown code blocks and inline code
+    var speakable = text.replace(Regex("```[\\s\\S]*?```"), " ")
+    speakable = speakable.replace(Regex("`[^`]*`"), " ")
+    
+    // Replace standard math operators with natural, friendly Hindi spoken equivalents
+    speakable = speakable.replace(" + ", " प्लस ")
+    speakable = speakable.replace(" - ", " माइनस ")
+    speakable = speakable.replace(" = ", " बराबर है ")
+    speakable = speakable.replace(" * ", " गुणा ")
+    speakable = speakable.replace(" / ", " भाग ")
+    
+    // Strip bold/italic markdown indicators
+    speakable = speakable.replace(Regex("\\*\\*([^*]+)\\*\\*"), "$1")
+    speakable = speakable.replace(Regex("\\*([^*]+)\\*"), "$1")
+    speakable = speakable.replace(Regex("__([^_]+)__"), "$1")
+    speakable = speakable.replace(Regex("_([^_]+)_"), "$1")
+    
+    // Strip bullet points or numbering decorations at start of lines
+    speakable = speakable.replace(Regex("(?m)^\\s*[-*•+]\\s*"), "")
+    speakable = speakable.replace(Regex("(?m)^\\s*\\d+\\.\\s*"), "")
+    
+    // Remove heading markers
+    speakable = speakable.replace(Regex("#+"), "")
+    
+    // Remove unwanted symbols
+    speakable = speakable.replace(Regex("[@₹_*~^|\\\\\\[\\]{}()<>]"), " ")
+    
+    // Replace repeated punctuation with single punctuation (for correct natural pauses)
+    speakable = speakable.replace(Regex("([.,!?;])\\1+"), "$1")
+    
+    // Remove brackets but keep space
+    speakable = speakable.replace(Regex("[()\"']"), " ")
+    
+    // Replace newlines with spaces or periods for pauses
+    speakable = speakable.replace("\n", " . ")
+    
+    // Condense multiple spaces
+    speakable = speakable.replace(Regex("\\s+"), " ").trim()
+    
+    return speakable
+}
+
+fun copyUriToCache(context: Context, uri: Uri, fileName: String): java.io.File? {
+    return try {
+        val inputStream = context.contentResolver.openInputStream(uri) ?: return null
+        val cacheFile = java.io.File(context.cacheDir, fileName)
+        if (cacheFile.exists()) {
+            cacheFile.delete()
+        }
+        cacheFile.createNewFile()
+        java.io.FileOutputStream(cacheFile).use { outputStream ->
+            inputStream.use { input ->
+                input.copyTo(outputStream)
+            }
+        }
+        cacheFile
+    } catch (e: Exception) {
+        android.util.Log.e("LakshyaAiDebug", "Error copying URI to cache file", e)
+        e.printStackTrace()
+        null
+    }
+}
+
+fun enhanceBitmapForOcr(src: Bitmap): Bitmap {
+    try {
+        val width = src.width
+        val height = src.height
+        val dest = Bitmap.createBitmap(width, height, src.config ?: Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(dest)
+        val paint = android.graphics.Paint()
+        
+        // High-fidelity ColorMatrix for auto-enhancing brightness and contrast
+        // Scale factor: 1.3f (boost contrast), translate: 15f (boost brightness)
+        val scale = 1.3f
+        val translate = 15f
+        val cm = android.graphics.ColorMatrix(floatArrayOf(
+            scale, 0f, 0f, 0f, translate,
+            0f, scale, 0f, 0f, translate,
+            0f, 0f, scale, 0f, translate,
+            0f, 0f, 0f, 1f, 0f
+        ))
+        
+        paint.colorFilter = android.graphics.ColorMatrixColorFilter(cm)
+        canvas.drawBitmap(src, 0f, 0f, paint)
+        return dest
+    } catch (e: Exception) {
+        e.printStackTrace()
+        return src
+    }
+}
+
 // Cache of supported models retrieved from the API to avoid redundant calls.
 private var supportedModelsCache: List<String> = emptyList()
 
@@ -161,7 +320,12 @@ fun Modifier.glassCard(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LakshyaAiScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
+fun LakshyaAiScreen(
+    viewModel: AcademyViewModel,
+    initialChapterContext: String? = null,
+    initialSubjectContext: String? = null,
+    onBack: () -> Unit
+) {
     var selectedTab by remember { mutableStateOf(0) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -189,9 +353,44 @@ fun LakshyaAiScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
     var spokenText by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(1000L)
+            com.example.util.StudyTracker.addStudyTime(context, 1)
+        }
+    }
+
+    LaunchedEffect(Unit) {
         tts = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale("hi", "IN") // Hindi/English hybrid
+                val hiLocale = Locale("hi", "IN")
+                val ttsVoices = tts?.voices
+                var selectedVoice: android.speech.tts.Voice? = null
+                
+                if (!ttsVoices.isNullOrEmpty()) {
+                    // Try to find a high-quality Hindi voice (natural, local, or neural-net-based)
+                    val hindiVoices = ttsVoices.filter { it.locale.language == "hi" }
+                    if (hindiVoices.isNotEmpty()) {
+                        selectedVoice = hindiVoices.firstOrNull { voice ->
+                            val name = voice.name.lowercase(Locale.US)
+                            name.contains("natural") || name.contains("neural") || name.contains("premium")
+                        } ?: hindiVoices.firstOrNull { voice ->
+                            val name = voice.name.lowercase(Locale.US)
+                            name.contains("hi-in-x") && !voice.isNetworkConnectionRequired
+                        } ?: hindiVoices.firstOrNull { voice ->
+                            voice.locale.country == "IN" && !voice.isNetworkConnectionRequired
+                        } ?: hindiVoices.first()
+                    }
+                }
+                
+                if (selectedVoice != null) {
+                    tts?.voice = selectedVoice
+                } else {
+                    tts?.language = hiLocale
+                }
+                
+                // Set optimal speech rate (0.9f) and pitch (1.0f) for a natural, smooth, teacher-like delivery
+                tts?.setSpeechRate(0.9f)
+                tts?.setPitch(1.0f)
             }
         }
     }
@@ -208,8 +407,9 @@ fun LakshyaAiScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
             Toast.makeText(context, "Weekly limit of 5 Voice conversations reached!", Toast.LENGTH_LONG).show()
         } else {
             tts?.stop()
-            spokenText = text
-            val speechResult = tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "LakshyaTTS")
+            val cleanedForSpeech = sanitizeForSpeech(text)
+            spokenText = cleanedForSpeech
+            val speechResult = tts?.speak(cleanedForSpeech, TextToSpeech.QUEUE_FLUSH, null, "LakshyaTTS")
             if (speechResult == TextToSpeech.SUCCESS) {
                 isTtsSpeaking = true
                 voiceCountThisWeek++
@@ -255,13 +455,26 @@ fun LakshyaAiScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
                                     )
                                 )
                             }
-                            Text(
-                                "AI Teacher & Study Coach", 
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    color = Color(0xFFA5B4FC),
-                                    fontWeight = FontWeight.Medium
+                            if (initialChapterContext != null) {
+                                Text(
+                                    "${initialSubjectContext ?: "General"} > $initialChapterContext",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        color = SecondaryNeonCyan,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
-                            )
+                            } else {
+                                Text(
+                                    "AI Teacher & Study Coach", 
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        color = Color(0xFFA5B4FC),
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                )
+                            }
                         }
                     },
                     navigationIcon = {
@@ -340,6 +553,8 @@ fun LakshyaAiScreen(viewModel: AcademyViewModel, onBack: () -> Unit) {
                             examMode = selectedExamMode,
                             difficultyMode = selectedDifficultyMode,
                             imagesCount = imagesCountToday,
+                            initialChapterContext = initialChapterContext,
+                            initialSubjectContext = initialSubjectContext,
                             onImageUsed = {
                                 imagesCountToday++
                                 prefs.edit().putInt("images_count_today", imagesCountToday).apply()
@@ -400,6 +615,8 @@ fun AiTeacherTab(
     examMode: String,
     difficultyMode: String,
     imagesCount: Int,
+    initialChapterContext: String? = null,
+    initialSubjectContext: String? = null,
     onImageUsed: () -> Unit,
     onSpeakRequest: (String) -> Unit
 ) {
@@ -424,6 +641,7 @@ fun AiTeacherTab(
     
     var selectedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var selectedPdfUri by remember { mutableStateOf<Uri?>(null) }
+    var showCameraPermissionRationale by remember { mutableStateOf(false) }
 
     // Initial Loading of History from SharedPrefs
     LaunchedEffect(Unit) {
@@ -638,33 +856,280 @@ fun AiTeacherTab(
     }
 
     // Media Launchers
-    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
-        if (bitmap != null) {
-            if (imagesCount >= 5) {
-                Toast.makeText(context, "Daily image limit of 5 reached!", Toast.LENGTH_LONG).show()
+    var cameraTempUri by remember { mutableStateOf<Uri?>(null) }
+
+    fun sendMessage(userText: String, userBitmap: Bitmap?, userPdf: Uri?) {
+        if (userText.isNotBlank() || userBitmap != null || userPdf != null) {
+            messages.add(ChatMessage(userText, true, bitmap = userBitmap, pdfUri = userPdf))
+            inputText = ""
+            selectedBitmap = null
+            selectedPdfUri = null
+            isLoading = true
+            loadStatusText = "Connecting to Google AI Studio..."
+
+            if (userBitmap != null) {
+                android.util.Log.d("LakshyaAiDebug", "Image Sent To OCR")
+                onImageUsed()
+            }
+            autoSaveActiveChat()
+            
+            scope.launch {
+                try {
+                    val parts = mutableListOf<Part>()
+                    if (userText.isNotBlank()) parts.add(Part(text = userText))
+                    
+                    if (userBitmap != null) {
+                        val stream = ByteArrayOutputStream()
+                        userBitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+                        val base64Image = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+                        parts.add(Part(inlineData = InlineData(mimeType = "image/jpeg", data = base64Image)))
+                    }
+                    
+                    if (userPdf != null) {
+                        val inputStream = context.contentResolver.openInputStream(userPdf)
+                        val bytes = inputStream?.readBytes()
+                        if (bytes != null) {
+                            val base64Pdf = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                            parts.add(Part(inlineData = InlineData(mimeType = "application/pdf", data = base64Pdf)))
+                        }
+                    }
+                    
+                    val sysInstructionText = """
+                         CRITICAL DIRECTIVE FOR IMAGE ANALYSIS (CROP COMPLIANCE):
+                         - The student has CROPPED the input image to focus ONLY on one specific question or formula. You MUST analyze ONLY the cropped/selected area.
+                         - Do NOT answer any questions or explain concepts that fall outside this cropped area.
+                         - Ignore all unrelated text, headers, footers, page numbers, or adjacent questions.
+                         - If multiple questions are visible but one is clearly cropped/centered, explain ONLY that one.
+
+                         CRITICAL LANGUAGE SELECTION & DETECTION RULES:
+                         - Automatically detect the language of the user's question (whether asked via text, read from an image via OCR, or from a PDF).
+                         - If the user asks in Hindi or Hinglish: Return the COMPLETE answer in Hindi (Devanagari script). Do NOT mix Hindi and English randomly in the same answer. Only keep essential scientific terms/names in brackets ONCE (e.g., डीऑक्सीराइबोज (Deoxyribose), माइटोकॉन्ड्रिया (Mitochondria), फॉस्फेट (Phosphate)). Never write paragraphs in mixed English/Hindi.
+                         - If the user asks in English: Return the COMPLETE answer in English.
+                         - If the user explicitly requests bilingual output: Return Hindi first and English below it. Otherwise, never mix both languages.
+ 
+                         PREMIUM RESPONSE FORMAT (COACHING NOTES STRUCTURE):
+                         - Every single answer must be automatically structured like premium coaching notes with the following sections (use these exact emojis and titles):
+                           📘 Title: (A clear, concise, and professional title of the topic)
+                           📖 Introduction: (A friendly, pedagogical introduction to the topic)
+                           🔹 Main Explanation: (Step-by-step detailed explanation of the concept or solution)
+                           🔸 Important Points: (Key takeaways or crucial core facts)
+                           📌 Examples: (Illustrative real-world examples or math applications)
+                           📝 Exam Notes: (Tips on how to write this in exams, common traps, or scoring points)
+                           💡 Memory Trick: (A short mnemonic or analogy to remember the concept, if applicable)
+                           📚 Summary: (A high-yield summary of the answer)
+                           ❓ Practice Question: (A relevant practice question for self-assessment, optional)
+                         - Format the text beautifully using paragraphs and bullet points, but NEVER use raw markdown header markers like #, ##, or ###. Use the section titles above as headings instead.
+ 
+                         CRITICAL TEXT FORMATTING & SPECIAL CHARACTER RULES:
+                         - NEVER generate or output unwanted/decorative special characters or garbage symbols like @, ₹, _, *, +, (, ), {, }, [, ], <, >, ~, ^, |, \\.
+                         - Do NOT use raw Markdown formatting symbols like ##, ###, **, __, ***, ---, ``` inside your output text.
+                         - You are ONLY permitted to use mathematical symbols if they are strictly required in a mathematical equation, chemistry formula, programming code block, or scientific notation.
+                         - Do NOT use repeated characters for visual borders/decorations (e.g., do NOT output '***', '===', '~~~', etc.).
+ 
+                         CRITICAL HINDI LANGUAGE RULES:
+                         - If the user asks in Hindi or Hinglish (or if the question is written in Hindi/Hinglish), you MUST reply in highly natural, clean, grammatically correct Devanagari Hindi.
+                         - Avoid broken Hindi and avoid mixing in unnecessary English words. Use proper Hindi educational vocabulary or standard transliterated terms (like 'समीकरण' for equation, 'बल' for force) so that it sounds extremely natural, student-friendly, and easy to understand.
+                         - Keep the explanation step-by-step and pedagogical.
+ 
+                         CRITICAL IMAGE ERROR HANDLING:
+                         - If the uploaded image is blurry, out-of-focus, or the text is illegible, you MUST reply with exactly: "Image is not clear. Please crop the question properly or capture a clearer photo."
+                         - If there is no recognizable question, text, or formula inside the cropped image, you MUST reply with exactly: "No readable question found.""
+
+                         ${initialChapterContext?.let { "CRITICAL REQUIREMENT: The student is asking doubts specifically for the chapter: '$it' (Subject: '${initialSubjectContext ?: "General"}'). You MUST answer the student's question ONLY using the context of, and concepts taught within, the chapter: '$it' when possible. Keep answers strictly focused and limited to this chapter's scope where applicable." } ?: ""}
+                        You are Lakshya AI 5.0 Ultra, the smartest AI Teacher.
+                        AI Personality: Be patient. Explain politely. Never skip steps. Always motivate students. Support Hindi, English, and Hinglish natively. You can also read handwriting from images and extract text from PDFs.
+                        Current Student Settings:
+                        - Target Exam/Class: $examMode
+                        - Target Learning Level: $difficultyMode (if Easy, explain using extremely simple analogies; if Medium, explain concepts with standard examples; if Advanced, explain using full math proofs, formal derivations and deep logic).
+                    """.trimIndent()
+                    
+                    val req = GenerateContentRequest(
+                        contents = listOf(Content(parts = parts, role = "user")),
+                        systemInstruction = Content(parts = listOf(Part(text = sysInstructionText)))
+                    )
+                    
+                    if (userBitmap != null) {
+                        android.util.Log.d("LakshyaAiDebug", "OCR Started")
+                    }
+                    android.util.Log.d("LakshyaAiDebug", "AI Request Started")
+                    val botReply = queryGeminiWithRetry(req, "gemini-3.5-flash")
+                    android.util.Log.d("LakshyaAiDebug", "AI Response Generated")
+                    if (userBitmap != null) {
+                        android.util.Log.d("LakshyaAiDebug", "OCR Finished")
+                    }
+                    messages.add(ChatMessage(botReply, false))
+                    autoSaveActiveChat()
+                } catch (e: Exception) {
+                    android.util.Log.e("LakshyaAiDebug", "Error during AI response generation", e)
+                    e.printStackTrace()
+                    val errorMsg = e.message ?: "An unknown error occurred."
+                    messages.add(ChatMessage("Error: $errorMsg", false))
+                    autoSaveActiveChat()
+                } finally {
+                    isLoading = false
+                    loadStatusText = ""
+                }
+            }
+        }
+    }
+
+    val cropImageLauncher = rememberLauncherForActivityResult(com.canhub.cropper.CropImageContract()) { result ->
+        if (result.isSuccessful) {
+            android.util.Log.d("LakshyaAiDebug", "Crop Confirm Button Clicked")
+            android.util.Log.d("LakshyaAiDebug", "Crop Successful")
+            val uriContent = result.uriContent
+            if (uriContent != null) {
+                if (imagesCount >= 5) {
+                    Toast.makeText(context, "Daily image limit of 5 reached!", Toast.LENGTH_LONG).show()
+                } else {
+                    try {
+                        val inputStream = context.contentResolver.openInputStream(uriContent)
+                        val originalBitmap = BitmapFactory.decodeStream(inputStream)
+                        
+                        // Enhance quality, brightness, and contrast for better OCR readability
+                        val enhancedBitmap = enhanceBitmapForOcr(originalBitmap)
+                        
+                        // Compress bitmap with 85% quality to keep clarity extremely high
+                        val out = java.io.ByteArrayOutputStream()
+                        enhancedBitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                        val compressedBitmap = BitmapFactory.decodeByteArray(out.toByteArray(), 0, out.toByteArray().size)
+                        
+                        selectedBitmap = compressedBitmap
+                        selectedPdfUri = null
+                        
+                        android.util.Log.d("LakshyaAiDebug", "Cropped Image Returned")
+                        // Automatically send to AI after crop
+                        sendMessage("", compressedBitmap, null)
+                    } catch (e: Exception) {
+                        android.util.Log.e("LakshyaAiDebug", "Error loading cropped image", e)
+                        e.printStackTrace()
+                    }
+                }
+            }
+        } else {
+            android.util.Log.d("LakshyaAiDebug", "Crop Cancelled")
+            val error = result.error
+            error?.printStackTrace()
+            if (error != null) {
+                Toast.makeText(context, "Crop failed: ${error.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        if (success) {
+            android.util.Log.d("LakshyaAiDebug", "Photo Captured")
+            android.util.Log.d("LakshyaAiDebug", "Use Photo Clicked")
+            val tempFile = java.io.File(context.cacheDir, "temp_cam.jpg")
+            if (tempFile.exists()) {
+                android.util.Log.d("LakshyaAiDebug", "Crop Screen Opened")
+                cropImageLauncher.launch(
+                    com.canhub.cropper.CropImageContractOptions(
+                        uri = Uri.fromFile(tempFile),
+                        cropImageOptions = com.canhub.cropper.CropImageOptions(
+                            guidelines = com.canhub.cropper.CropImageView.Guidelines.ON,
+                            allowFlipping = false,
+                            allowRotation = true,
+                            allowCounterRotation = true,
+                            showCropOverlay = true,
+                            showProgressBar = true,
+                            cropMenuCropButtonTitle = "DONE",
+                            activityTitle = "Crop Question",
+                            activityMenuIconColor = android.graphics.Color.WHITE
+                        )
+                    )
+                )
             } else {
-                selectedBitmap = bitmap
-                selectedPdfUri = null
+                android.util.Log.e("LakshyaAiDebug", "Camera temp file does not exist")
             }
         }
     }
     
     val cameraPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
         if (isGranted) {
-            cameraLauncher.launch(null)
+            try {
+                android.util.Log.d("LakshyaAiDebug", "Camera Opened")
+                val tmpFile = java.io.File(context.cacheDir, "temp_cam.jpg")
+                if (tmpFile.exists()) tmpFile.delete()
+                tmpFile.createNewFile()
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    tmpFile
+                )
+                cameraTempUri = uri
+                cameraLauncher.launch(uri)
+            } catch (e: Exception) {
+                android.util.Log.e("LakshyaAiDebug", "Failed to open camera permission action", e)
+                e.printStackTrace()
+                Toast.makeText(context, "Failed to open camera: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+            }
         } else {
-            Toast.makeText(context, "Camera permission is required to snap questions", Toast.LENGTH_LONG).show()
+            showCameraPermissionRationale = true
         }
+    }
+
+    if (showCameraPermissionRationale) {
+        AlertDialog(
+            onDismissRequest = { showCameraPermissionRationale = false },
+            title = { Text("Camera Permission Required", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = { Text("Lakshya AI Coach needs access to your camera so you can take photos of your questions or study materials for instant analysis and solutions.", color = Color.LightGray) },
+            confirmButton = {
+                Button(
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6200EE)),
+                    onClick = {
+                        showCameraPermissionRationale = false
+                        try {
+                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        } catch (e: Exception) {
+                            android.util.Log.e("LakshyaAiDebug", "Failed to launch camera permission", e)
+                            e.printStackTrace()
+                            Toast.makeText(context, "Error: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                ) {
+                    Text("Grant Permission", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCameraPermissionRationale = false }) {
+                    Text("Cancel", color = Color.White)
+                }
+            },
+            containerColor = Color(0xFF130F2C)
+        )
     }
     
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
-            if (imagesCount >= 5) {
-                Toast.makeText(context, "Daily image limit of 5 reached!", Toast.LENGTH_LONG).show()
-            } else {
-                val inputStream = context.contentResolver.openInputStream(uri)
-                selectedBitmap = BitmapFactory.decodeStream(inputStream)
-                selectedPdfUri = null
+            android.util.Log.d("LakshyaAiDebug", "Image Selected: $uri")
+            try {
+                val tempFile = copyUriToCache(context, uri, "temp_gallery.jpg")
+                if (tempFile != null && tempFile.exists()) {
+                    android.util.Log.d("LakshyaAiDebug", "Crop Screen Opened")
+                    cropImageLauncher.launch(
+                        com.canhub.cropper.CropImageContractOptions(
+                            uri = Uri.fromFile(tempFile),
+                            cropImageOptions = com.canhub.cropper.CropImageOptions(
+                                guidelines = com.canhub.cropper.CropImageView.Guidelines.ON,
+                                allowFlipping = false,
+                                allowRotation = true,
+                                allowCounterRotation = true,
+                                showCropOverlay = true,
+                                showProgressBar = true,
+                                cropMenuCropButtonTitle = "DONE",
+                                activityTitle = "Crop Question",
+                                activityMenuIconColor = android.graphics.Color.WHITE
+                            )
+                        )
+                    )
+                } else {
+                    android.util.Log.e("LakshyaAiDebug", "Failed to copy gallery image to cache file")
+                    Toast.makeText(context, "Failed to load selected image", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("LakshyaAiDebug", "Error preparing gallery crop", e)
+                e.printStackTrace()
             }
         }
     }
@@ -1156,20 +1621,44 @@ fun AiTeacherTab(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = {
+                        android.util.Log.d("LakshyaAiDebug", "Camera Opened")
                         val hasCameraPermission = ContextCompat.checkSelfPermission(
                             context,
                             Manifest.permission.CAMERA
                         ) == PackageManager.PERMISSION_GRANTED
                         
                         if (hasCameraPermission) {
-                            cameraLauncher.launch(null)
+                            try {
+                                val tmpFile = java.io.File(context.cacheDir, "temp_cam.jpg")
+                                if (tmpFile.exists()) tmpFile.delete()
+                                tmpFile.createNewFile()
+                                val uri = androidx.core.content.FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    tmpFile
+                                )
+                                cameraTempUri = uri
+                                cameraLauncher.launch(uri)
+                            } catch (e: Exception) {
+                                android.util.Log.e("LakshyaAiDebug", "Error launching camera directly", e)
+                                e.printStackTrace()
+                                Toast.makeText(context, "Failed to open camera: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                            }
                         } else {
-                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                            val activity = context as? android.app.Activity
+                            if (activity != null && androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.CAMERA)) {
+                                showCameraPermissionRationale = true
+                            } else {
+                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                            }
                         }
                     }) {
                         Icon(Icons.Default.CameraAlt, contentDescription = "Camera Scan", tint = Color.White)
                     }
-                    IconButton(onClick = { imagePicker.launch("image/*") }) {
+                    IconButton(onClick = {
+                        android.util.Log.d("LakshyaAiDebug", "Gallery Opened")
+                        imagePicker.launch("image/*")
+                    }) {
                         Icon(Icons.Default.Image, contentDescription = "Gallery", tint = Color.White)
                     }
                     IconButton(onClick = { pdfPicker.launch("application/pdf") }) {
@@ -1222,70 +1711,7 @@ fun AiTeacherTab(
                     // Send button
                     IconButton(
                         onClick = {
-                            val userText = inputText
-                            val userBitmap = selectedBitmap
-                            val userPdf = selectedPdfUri
-                            
-                            if (userText.isNotBlank() || userBitmap != null || userPdf != null) {
-                                messages.add(ChatMessage(userText, true, bitmap = userBitmap, pdfUri = userPdf))
-                                inputText = ""
-                                selectedBitmap = null
-                                selectedPdfUri = null
-                                isLoading = true
-                                loadStatusText = "Connecting to Google AI Studio..."
-
-                                if (userBitmap != null) {
-                                    onImageUsed()
-                                }
-                                autoSaveActiveChat()
-                                
-                                scope.launch {
-                                    try {
-                                        val parts = mutableListOf<Part>()
-                                        if (userText.isNotBlank()) parts.add(Part(text = userText))
-                                        
-                                        if (userBitmap != null) {
-                                            val stream = ByteArrayOutputStream()
-                                            userBitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream)
-                                            val base64Image = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
-                                            parts.add(Part(inlineData = InlineData(mimeType = "image/jpeg", data = base64Image)))
-                                        }
-                                        
-                                        if (userPdf != null) {
-                                            val inputStream = context.contentResolver.openInputStream(userPdf)
-                                            val bytes = inputStream?.readBytes()
-                                            if (bytes != null) {
-                                                val base64Pdf = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                                                parts.add(Part(inlineData = InlineData(mimeType = "application/pdf", data = base64Pdf)))
-                                            }
-                                        }
-                                        
-                                        val sysInstructionText = """
-                                            You are Lakshya AI 5.0 Ultra, the smartest AI Teacher.
-                                            AI Personality: Be patient. Explain politely. Never skip steps. Always motivate students. Support Hindi, English, and Hinglish natively. You can also read handwriting from images and extract text from PDFs.
-                                            Current Student Settings:
-                                            - Target Exam/Class: $examMode
-                                            - Target Learning Level: $difficultyMode (if Easy, explain using extremely simple analogies; if Medium, explain concepts with standard examples; if Advanced, explain using full math proofs, formal derivations and deep logic).
-                                        """.trimIndent()
-                                        
-                                        val req = GenerateContentRequest(
-                                            contents = listOf(Content(parts = parts, role = "user")),
-                                            systemInstruction = Content(parts = listOf(Part(text = sysInstructionText)))
-                                        )
-                                        
-                                        val botReply = queryGeminiWithRetry(req, "gemini-3.5-flash")
-                                        messages.add(ChatMessage(botReply, false))
-                                        autoSaveActiveChat()
-                                    } catch (e: Exception) {
-                                        val errorMsg = e.message ?: "An unknown error occurred."
-                                        messages.add(ChatMessage("Error: $errorMsg", false))
-                                        autoSaveActiveChat()
-                                    } finally {
-                                        isLoading = false
-                                        loadStatusText = ""
-                                    }
-                                }
-                            }
+                            sendMessage(inputText, selectedBitmap, selectedPdfUri)
                         },
                         modifier = Modifier.testTag("send_button"),
                         enabled = !isLoading && (inputText.isNotBlank() || selectedBitmap != null || selectedPdfUri != null)
@@ -1405,7 +1831,7 @@ fun ChatBubble(
                     }
                     if (msg.text.isNotBlank()) {
                         StreamingText(
-                            text = msg.text, 
+                            text = sanitizeForDisplay(msg.text), 
                             isUser = msg.isUser, 
                             isLastMessage = isLastMessage
                         )

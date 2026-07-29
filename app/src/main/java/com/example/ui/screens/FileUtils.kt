@@ -94,44 +94,97 @@ fun detectVideoSourceType(url: String): String {
     return "LOCAL"
 }
 
+fun isYouTubeUrl(url: String): Boolean {
+    val lower = url.trim().lowercase()
+    return lower.contains("youtube.com") || lower.contains("youtu.be")
+}
+
 fun extractYouTubeVideoId(url: String): String? {
     val cleanUrl = url.trim()
     if (cleanUrl.isBlank()) return null
     
-    // 1. Check if the input itself is a raw 11-char video ID
-    if (cleanUrl.length == 11 && cleanUrl.matches(Regex("[a-zA-Z0-9_-]{11}"))) {
-        return cleanUrl
-    }
-    
-    // 2. Handle standard URL formats
     return try {
-        val uri = Uri.parse(cleanUrl)
-        val host = uri.host?.lowercase()
-        
         when {
-            host == null -> null
-            host.contains("youtu.be") -> {
-                uri.pathSegments.firstOrNull()
+            cleanUrl.contains("watch?v=") -> {
+                cleanUrl.substringAfter("watch?v=").substringBefore("&").substringBefore("?")
             }
-            host.contains("youtube.com") -> {
-                when {
-                    uri.pathSegments.contains("watch") -> uri.getQueryParameter("v")
-                    uri.pathSegments.contains("shorts") -> uri.pathSegments.getOrNull(uri.pathSegments.indexOf("shorts") + 1)
-                    uri.pathSegments.contains("embed") -> uri.pathSegments.getOrNull(uri.pathSegments.indexOf("embed") + 1)
-                    uri.pathSegments.contains("v") -> uri.pathSegments.getOrNull(uri.pathSegments.indexOf("v") + 1)
-                    else -> uri.getQueryParameter("v")
-                }
+            cleanUrl.contains("youtu.be/") -> {
+                cleanUrl.substringAfter("youtu.be/").substringBefore("?").substringBefore("&")
+            }
+            cleanUrl.contains("youtube.com/embed/") -> {
+                cleanUrl.substringAfter("youtube.com/embed/").substringBefore("?").substringBefore("&")
+            }
+            cleanUrl.contains("youtube.com/live/") -> {
+                cleanUrl.substringAfter("youtube.com/live/").substringBefore("?").substringBefore("&")
+            }
+            cleanUrl.contains("youtube.com/shorts/") -> {
+                cleanUrl.substringAfter("youtube.com/shorts/").substringBefore("?").substringBefore("&")
+            }
+            cleanUrl.contains("youtube.com/v/") -> {
+                cleanUrl.substringAfter("youtube.com/v/").substringBefore("?").substringBefore("&")
+            }
+            cleanUrl.contains("watch?") && cleanUrl.contains("v=") -> {
+                cleanUrl.substringAfter("v=").substringBefore("&").substringBefore("?")
             }
             else -> {
-                // Regex fallback for non-standard or malformed URLs
-                val regex = "(?:youtube\\.com\\/(?:[^/]+\\/.+\\/|(?:v|e(?:mbed)?)\\/|.*[?&]v=)|youtu\\.be\\/)([^\"&?/\\s]{11})"
-                val pattern = java.util.regex.Pattern.compile(regex, java.util.regex.Pattern.CASE_INSENSITIVE)
-                val matcher = pattern.matcher(cleanUrl)
-                if (matcher.find()) matcher.group(1) else null
+                if (cleanUrl.length == 11 && !cleanUrl.contains("/") && !cleanUrl.contains(".") && !cleanUrl.contains("?")) {
+                    cleanUrl
+                } else {
+                    null
+                }
             }
         }
     } catch (e: Exception) {
         null
+    }
+}
+
+fun extractYouTubePlaylistId(url: String): String? {
+    val cleanUrl = url.trim()
+    if (cleanUrl.isBlank()) return null
+    return try {
+        when {
+            cleanUrl.contains("list=") -> {
+                cleanUrl.substringAfter("list=").substringBefore("&").substringBefore("?")
+            }
+            else -> null
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
+fun getYouTubeEmbedUrl(url: String): String {
+    val cleanUrl = url.trim()
+    val videoId = extractYouTubeVideoId(cleanUrl)
+    val playlistId = extractYouTubePlaylistId(cleanUrl)
+
+    return when {
+        videoId != null && playlistId != null -> {
+            "https://www.youtube.com/embed/$videoId?list=$playlistId&autoplay=1&rel=0&modestbranding=1&playsinline=1"
+        }
+        playlistId != null -> {
+            "https://www.youtube.com/embed/videoseries?list=$playlistId&autoplay=1&rel=0&modestbranding=1&playsinline=1"
+        }
+        videoId != null -> {
+            "https://www.youtube.com/embed/$videoId?autoplay=1&rel=0&modestbranding=1&playsinline=1"
+        }
+        cleanUrl.lowercase().contains("channel/") && cleanUrl.lowercase().contains("/live") -> {
+            val channelId = cleanUrl.substringAfter("channel/").substringBefore("/")
+            "https://www.youtube.com/embed/live_stream?channel=$channelId&autoplay=1"
+        }
+        cleanUrl.startsWith("http") -> cleanUrl
+        else -> "https://www.youtube.com/embed/$cleanUrl?autoplay=1&rel=0&modestbranding=1&playsinline=1"
+    }
+}
+
+fun getYouTubeThumbnailUrl(url: String): String {
+    val cleanUrl = url.trim()
+    val videoId = extractYouTubeVideoId(cleanUrl)
+    return if (videoId != null && videoId.isNotEmpty()) {
+        "https://img.youtube.com/vi/$videoId/hqdefault.jpg"
+    } else {
+        "https://img.youtube.com/vi/hqdefault.jpg"
     }
 }
 

@@ -21,6 +21,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import coil.compose.AsyncImage
 import com.example.R
 import com.example.ui.theme.BrandBluePrimary
 import com.example.ui.theme.BrandBlueSecondary
@@ -62,13 +63,13 @@ fun AuthScreen(
                         .size(92.dp)
                         .clip(CircleShape)
                         .background(Color.White)
-                        .border(BorderStroke(2.dp, Color.White), CircleShape),
+                        .border(BorderStroke(2.dp, Color(0xFFFFD700)), CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.lakshya_logo),
+                    AsyncImage(
+                        model = R.drawable.lakshya_logo,
                         contentDescription = "Lakshya Logo",
-                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                        modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
                 }
@@ -242,30 +243,7 @@ fun AuthScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Direct Quick-Login sandbox shortcuts for testing convenience!
-        Text(text = "Sandbox Demonstration Logins:", fontSize = 12.sp, color = Color.Gray)
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            modifier = Modifier.padding(bottom = 32.dp)
-        ) {
-            Button(
-                onClick = { onLogin("student@lakshya.com", "Anand Yadav", "STUDENT", false) },
-                colors = ButtonDefaults.buttonColors(containerColor = BrandBlueSecondary),
-                shape = RoundedCornerShape(20.dp)
-            ) {
-                Text("Demo Student", fontSize = 12.sp)
-            }
-            Button(
-                onClick = { onLogin("admin@lakshya.com", "Director Sir", "ADMIN", false) },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                shape = RoundedCornerShape(20.dp)
-            ) {
-                Text("Demo Administrator", fontSize = 12.sp)
-            }
-        }
+        Spacer(modifier = Modifier.height(32.dp))
     }
 
     if (showForgotPasswordDialog) {

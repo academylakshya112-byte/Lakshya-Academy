@@ -10,11 +10,17 @@ interface AcademyDao {
     @Query("SELECT * FROM courses ORDER BY id DESC")
     fun getAllCourses(): Flow<List<CourseEntity>>
 
+    @Query("SELECT * FROM courses ORDER BY id DESC")
+    suspend fun getAllCoursesDirect(): List<CourseEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCourse(course: CourseEntity): Long
 
     @Query("DELETE FROM courses WHERE id = :id")
     suspend fun deleteCourseById(id: Int)
+
+    @Query("DELETE FROM courses")
+    suspend fun deleteAllCourses()
 
     @Update
     suspend fun updateCourse(course: CourseEntity)
@@ -48,6 +54,9 @@ interface AcademyDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTest(test: TestEntity): Long
+
+    @Update
+    suspend fun updateTest(test: TestEntity)
 
     @Query("DELETE FROM tests WHERE id = :id")
     suspend fun deleteTestById(id: Int)
@@ -122,8 +131,11 @@ interface AcademyDao {
     @Query("DELETE FROM banners WHERE id = :id")
     suspend fun deleteBannerById(id: Int)
 
+    @Query("DELETE FROM banners")
+    suspend fun deleteAllBanners()
+
     // === Live Classes ===
-    @Query("SELECT * FROM live_classes ORDER BY scheduledTime ASC")
+    @Query("SELECT * FROM live_classes ORDER BY id DESC")
     fun getAllLiveClasses(): Flow<List<LiveClassEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -145,6 +157,63 @@ interface AcademyDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertVideoLimit(limit: AiVideoLimitEntity)
+
+    // === Syllabus Folders & Files ===
+    @Query("SELECT * FROM syllabus_folders ORDER BY id DESC")
+    fun getAllSyllabusFolders(): Flow<List<SyllabusFolderEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSyllabusFolder(folder: SyllabusFolderEntity): Long
+
+    @Query("DELETE FROM syllabus_folders WHERE id = :id")
+    suspend fun deleteSyllabusFolderById(id: Long)
+
+    @Query("SELECT * FROM syllabus_files ORDER BY id DESC")
+    fun getAllSyllabusFiles(): Flow<List<SyllabusFileEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSyllabusFile(file: SyllabusFileEntity): Long
+
+    @Query("DELETE FROM syllabus_files WHERE id = :id")
+    suspend fun deleteSyllabusFileById(id: Long)
+
+    // === Previous Paper Folders & Files ===
+    @Query("SELECT * FROM previous_paper_folders ORDER BY id DESC")
+    fun getAllPreviousPaperFolders(): Flow<List<PreviousPaperFolderEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPreviousPaperFolder(folder: PreviousPaperFolderEntity): Long
+
+    @Query("DELETE FROM previous_paper_folders WHERE id = :id")
+    suspend fun deletePreviousPaperFolderById(id: Long)
+
+    @Query("SELECT * FROM previous_paper_files ORDER BY id DESC")
+    fun getAllPreviousPaperFiles(): Flow<List<PreviousPaperFileEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPreviousPaperFile(file: PreviousPaperFileEntity): Long
+
+    @Query("DELETE FROM previous_paper_files WHERE id = :id")
+    suspend fun deletePreviousPaperFileById(id: Long)
+
+    // === Free Book Folders & Files ===
+    @Query("SELECT * FROM free_book_folders ORDER BY id DESC")
+    fun getAllFreeBookFolders(): Flow<List<FreeBookFolderEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertFreeBookFolder(folder: FreeBookFolderEntity): Long
+
+    @Query("DELETE FROM free_book_folders WHERE id = :id")
+    suspend fun deleteFreeBookFolderById(id: Long)
+
+    @Query("SELECT * FROM free_book_files ORDER BY id DESC")
+    fun getAllFreeBookFiles(): Flow<List<FreeBookFileEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertFreeBookFile(file: FreeBookFileEntity): Long
+
+    @Query("DELETE FROM free_book_files WHERE id = :id")
+    suspend fun deleteFreeBookFileById(id: Long)
 }
 
 @Database(
@@ -162,9 +231,15 @@ interface AcademyDao {
         BannerEntity::class,
         LiveClassEntity::class,
         AiAnimationLimitEntity::class,
-        AiVideoLimitEntity::class
+        AiVideoLimitEntity::class,
+        SyllabusFolderEntity::class,
+        SyllabusFileEntity::class,
+        PreviousPaperFolderEntity::class,
+        PreviousPaperFileEntity::class,
+        FreeBookFolderEntity::class,
+        FreeBookFileEntity::class
     ],
-    version = 11,
+    version = 17,
     exportSchema = false
 )
 abstract class AcademyDatabase : RoomDatabase() {

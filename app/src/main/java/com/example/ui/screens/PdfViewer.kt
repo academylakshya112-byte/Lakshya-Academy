@@ -41,46 +41,22 @@ import java.io.OutputStream
 
 fun downloadPdfFromUri(context: android.content.Context, pdfUriString: String, pdfName: String) {
     try {
-        val uri = Uri.parse(pdfUriString)
-        val contentResolver = context.contentResolver
-        val inputStream: InputStream? = contentResolver.openInputStream(uri)
-        if (inputStream == null) {
-            Toast.makeText(context, "Cannot open PDF file source", Toast.LENGTH_SHORT).show()
-            return
-        }
-
         val sanitizedName = pdfName.replace("[\\\\/:*?\"<>|]".toRegex(), "_")
         val fileName = if (sanitizedName.endsWith(".pdf", ignoreCase = true)) sanitizedName else "$sanitizedName.pdf"
-
-        val values = ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-            put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-            }
-        }
-
-        val downloadUri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-        if (downloadUri == null) {
-            Toast.makeText(context, "Failed to create Download file reference", Toast.LENGTH_SHORT).show()
-            inputStream.close()
-            return
-        }
-
-        val outputStream: OutputStream? = contentResolver.openOutputStream(downloadUri)
-        if (outputStream == null) {
-            Toast.makeText(context, "Failed to open Download location output stream", Toast.LENGTH_SHORT).show()
-            inputStream.close()
-            return
-        }
-
-        inputStream.use { input ->
-            outputStream.use { output ->
-                input.copyTo(output)
-            }
-        }
-
-        Toast.makeText(context, "PDF downloaded successfully: $fileName", Toast.LENGTH_LONG).show()
+        
+        val downloadManager = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+        val uri = Uri.parse(pdfUriString)
+        val request = android.app.DownloadManager.Request(uri)
+            .setTitle(fileName)
+            .setDescription("Downloading PDF...")
+            .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
+            .setMimeType("application/pdf")
+            .setAllowedOverMetered(true)
+            .setAllowedOverRoaming(true)
+        
+        downloadManager.enqueue(request)
+        Toast.makeText(context, "Download started: $fileName", Toast.LENGTH_SHORT).show()
     } catch (e: Exception) {
         e.printStackTrace()
         Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()

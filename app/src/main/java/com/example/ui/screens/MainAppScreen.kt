@@ -16,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -41,14 +42,19 @@ import com.example.ui.viewmodel.AcademyViewModel
 import kotlinx.coroutines.delay
 
 fun formatQuestionOrOptionText(text: String, language: String): String {
-    if (!text.contains(" / ")) {
-        return text
+    val cleanText = if (text.contains("---METADATA---")) {
+        text.substringBefore("---METADATA---").trim()
+    } else {
+        text
     }
-    val parts = text.split(" / ", limit = 2)
+    if (!cleanText.contains(" / ")) {
+        return cleanText
+    }
+    val parts = cleanText.split(" / ", limit = 2)
     return when (language) {
         "ENG" -> parts[0].trim()
         "HIN" -> parts.getOrNull(1)?.trim() ?: parts[0].trim()
-        else -> text
+        else -> cleanText
     }
 }
 
@@ -63,23 +69,31 @@ fun MainAppScreen(
     val darkTheme = viewModel.darkThemeEnabled
     val isInternetAvailable = viewModel.isInternetConnectionAvailable
 
+    var showSplash by remember { mutableStateOf(true) }
+
     MyApplicationTheme(darkTheme = darkTheme) {
         Surface(
             modifier = modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background
         ) {
-            if (!isInternetAvailable) {
-                NoInternetScreen(onRetry = { viewModel.checkInternetStatus() })
-            } else if (currentUser == null) {
-                AuthScreen(
-                    onLogin = { email, name, role, isSignUp -> viewModel.login(email, name, role, isSignUp) },
-                    authError = viewModel.authError
-                )
+            if (showSplash) {
+                PremiumSplashScreen(onAnimationComplete = { showSplash = false })
             } else {
-                if (currentUser.role == "ADMIN") {
-                    AdminMainContainer(viewModel = viewModel)
-                } else {
-                    StudentMainContainer(viewModel = viewModel)
+                AppUpdateSystemHandler(viewModel = viewModel) {
+                    if (!isInternetAvailable) {
+                        NoInternetScreen(onRetry = { viewModel.checkInternetStatus() })
+                    } else if (currentUser == null) {
+                        AuthScreen(
+                            onLogin = { email, name, role, isSignUp -> viewModel.login(email, name, role, isSignUp) },
+                            authError = viewModel.authError
+                        )
+                    } else {
+                        if (currentUser.role == "ADMIN") {
+                            AdminMainContainer(viewModel = viewModel)
+                        } else {
+                            StudentMainContainer(viewModel = viewModel)
+                        }
+                    }
                 }
             }
         }
@@ -92,6 +106,8 @@ fun MainAppScreen(
 fun StudentMainContainer(viewModel: AcademyViewModel) {
     var studentTab by remember { mutableStateOf("home") } // home, courses, profile
     var activeStudyCourse by remember { mutableStateOf<CourseEntity?>(null) }
+    var activeDoubtSubject by remember { mutableStateOf<String?>(null) }
+    var activeDoubtChapter by remember { mutableStateOf<String?>(null) }
 
 
     val context = LocalContext.current
@@ -103,7 +119,7 @@ fun StudentMainContainer(viewModel: AcademyViewModel) {
 
     Scaffold(
         bottomBar = {
-            if (activeStudyCourse == null) {
+            if (activeStudyCourse == null && studentTab != "doubt_solver") {
                 NavigationBar {
                     NavigationBarItem(
                         selected = studentTab == "home",
@@ -127,13 +143,18 @@ fun StudentMainContainer(viewModel: AcademyViewModel) {
             }
         }
     ) { innerPadding ->
-        Box(modifier = Modifier.padding(innerPadding)) {
+        Box(modifier = Modifier.padding(if (studentTab == "doubt_solver") androidx.compose.foundation.layout.PaddingValues(0.dp) else innerPadding)) {
             if (activeStudyCourse != null) {
-                StudentLessonsMediaWorkspace(
-                    course = activeStudyCourse!!,
-                    completedCount = 0,
+                StudentR2VideosScreen(
                     viewModel = viewModel,
-                    onDismiss = { activeStudyCourse = null }
+                    initialBatch = activeStudyCourse!!.title,
+                    onBack = { activeStudyCourse = null },
+                    onNavigateToDoubtSolver = { subject, chapter ->
+                        activeDoubtSubject = subject
+                        activeDoubtChapter = chapter
+                        studentTab = "doubt_solver"
+                        activeStudyCourse = null
+                    }
                 )
             } else {
                 when (studentTab) {
@@ -146,9 +167,37 @@ fun StudentMainContainer(viewModel: AcademyViewModel) {
                         viewModel = viewModel,
                         onPlayCourse = { activeStudyCourse = it }
                     )
+                    "live_classes" -> LiveClassScreen(
+                        viewModel = viewModel,
+                        onBack = { studentTab = "home" }
+                    )
+                    "r2_videos" -> StudentR2VideosScreen(
+                        viewModel = viewModel,
+                        onBack = { studentTab = "home" },
+                        onNavigateToDoubtSolver = { subject, chapter ->
+                            activeDoubtSubject = subject
+                            activeDoubtChapter = chapter
+                            studentTab = "doubt_solver"
+                        }
+                    )
+                    "DASHBOARD" -> StudentProgressDashboard(
+                        viewModel = viewModel,
+                        onBack = { studentTab = "home" }
+                    )
                     "profile" -> StudentProfileView(viewModel = viewModel)
                     "TESTS" -> StudentTestHub(viewModel = viewModel)
-                    "doubt_solver" -> LakshyaAiScreen(viewModel = viewModel, onBack = { studentTab = "home" })
+                    "doubt_solver" -> LakshyaAiScreen(
+                        viewModel = viewModel,
+                        initialChapterContext = activeDoubtChapter,
+                        initialSubjectContext = activeDoubtSubject,
+                        onBack = {
+                            if (activeDoubtChapter != null) {
+                                activeDoubtChapter = null
+                                activeDoubtSubject = null
+                            }
+                            studentTab = "home"
+                        }
+                    )
                     "firebase_auth" -> FirebaseLoginScreen(onBack = { studentTab = "home" })
                 }
             }
@@ -168,7 +217,10 @@ fun AdminMainContainer(viewModel: AcademyViewModel) {
                 val tabs = listOf(
                     Triple("DASHBOARD", "Analytics", Icons.Default.Analytics),
                     Triple("COURSES", "Courses", Icons.Default.LibraryAdd),
+                    Triple("VIDEOS", "R2 Videos", Icons.Default.CloudUpload),
+                    Triple("LIVE", "Live Classes", Icons.Default.LiveTv),
                     Triple("BANNERS", "Banners", Icons.Default.Image),
+                    Triple("WEEKLY_MOCK", "Weekly Mock", Icons.Default.Quiz),
                     Triple("ALERTS", "Alerts", Icons.Default.Notifications)
                 )
                 tabs.forEach { (route, label, icon) ->
@@ -176,7 +228,7 @@ fun AdminMainContainer(viewModel: AcademyViewModel) {
                         selected = adminTab == route,
                         onClick = { adminTab = route },
                         icon = { Icon(icon, contentDescription = label) },
-                        label = { Text(label, fontSize = 10.sp) }
+                        label = { Text(label, fontSize = 8.sp, maxLines = 1) }
                     )
                 }
             }
@@ -187,7 +239,10 @@ fun AdminMainContainer(viewModel: AcademyViewModel) {
             when (adminTab) {
                 "DASHBOARD" -> AdminAnalyticsDashboard(viewModel = viewModel)
                 "COURSES" -> AdminCourseManager(viewModel = viewModel)
+                "VIDEOS" -> AdminR2UploadScreen(viewModel = viewModel)
+                "LIVE" -> AdminLiveClassScreen(viewModel = viewModel)
                 "BANNERS" -> AdminBannerManager(viewModel = viewModel)
+                "WEEKLY_MOCK" -> AdminWeeklyMockManager(viewModel = viewModel)
                 "ALERTS" -> AdminNotificationAlerts(viewModel = viewModel)
             }
         }
@@ -200,7 +255,7 @@ fun AdminTopAnnouncer(logout: () -> Unit) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(modifier = Modifier.size(36.dp).clip(CircleShape).background(Color.White)) {
-                    Image(painter = painterResource(id = R.drawable.lakshya_logo), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                    AsyncImage(model = R.drawable.lakshya_logo, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 }
                 Spacer(modifier = Modifier.width(10.dp))
                 Column {
@@ -222,30 +277,331 @@ fun DashboardBrandHeader(studentName: String) {
                 Text("Namaste $studentName! 👋", fontSize = 22.sp, fontWeight = FontWeight.Black)
             }
             Box(modifier = Modifier.size(60.dp).clip(CircleShape).background(Color.White)) {
-                Image(painter = painterResource(id = R.drawable.lakshya_logo), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                AsyncImage(model = R.drawable.lakshya_logo, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             }
         }
     }
 }
 
+data class PlatformInfo(val icon: androidx.compose.ui.graphics.vector.ImageVector, val color: Color)
+
+fun getPlatformInfo(linkUrl: String, title: String): PlatformInfo {
+    val urlLower = linkUrl.lowercase()
+    val titleLower = title.lowercase()
+    return when {
+        urlLower.contains("whatsapp") || titleLower.contains("whatsapp") -> {
+            PlatformInfo(Icons.Default.Chat, Color(0xFF25D366))
+        }
+        urlLower.contains("t.me") || urlLower.contains("telegram") || titleLower.contains("telegram") -> {
+            PlatformInfo(Icons.Default.Send, Color(0xFF229ED9))
+        }
+        urlLower.contains("instagram") || titleLower.contains("instagram") -> {
+            PlatformInfo(Icons.Default.PhotoCamera, Color(0xFFE1306C))
+        }
+        urlLower.contains("youtube") || titleLower.contains("youtube") -> {
+            PlatformInfo(Icons.Default.PlayArrow, Color(0xFFFF0000))
+        }
+        else -> {
+            PlatformInfo(Icons.Default.Link, Color(0xFF6366F1))
+        }
+    }
+}
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun BannerCarousel(banners: List<BannerEntity>, onTabSelect: (String) -> Unit) {
-    if (banners.isEmpty()) return
-    var currentIndex by remember { mutableIntStateOf(0) }
+    val context = LocalContext.current
+    
+    // Default banners specified by the user
+    val defaultBanners = remember {
+        listOf(
+            BannerEntity(
+                id = -1,
+                title = "Join Our Official Telegram Study Channel! 💎",
+                imageUrl = "drawable/img_banner_telegram_1783264931077",
+                linkUrl = "https://t.me/+k9fhlPovsDE5ZDI1",
+                buttonText = "JOIN NOW",
+                description = "Download free PDFs, daily GK questionnaires, exam syllabus & interactive worksheets instantly."
+            ),
+            BannerEntity(
+                id = -2,
+                title = "Subscribe to Our YouTube Channel! 📺",
+                imageUrl = "drawable/img_banner_youtube_1783264956533",
+                linkUrl = "https://youtube.com/@lakshyaacademyofficial100?si=U-dYfGwRQndZAD7A",
+                buttonText = "SUBSCRIBE",
+                description = "Watch Daily Live Classes, chapter-wise concept lectures and mock-test solutions daily."
+            ),
+            BannerEntity(
+                id = -3,
+                title = "Join Our Official WhatsApp Group! 👥",
+                imageUrl = "drawable/img_banner_whatsapp_1783264919547",
+                linkUrl = "https://chat.whatsapp.com/JDHYEnF8rQP3D0kIeH3Qoj?s=cl&p=a&ilr=2",
+                buttonText = "JOIN NOW",
+                description = "Stay updated with live class announcements, free PDF notes & community chat!"
+            ),
+            BannerEntity(
+                id = -4,
+                title = "Follow Our Instagram for Daily GK Reels! 📲",
+                imageUrl = "drawable/img_banner_instagram_1783264944727",
+                linkUrl = "https://www.instagram.com/toon_waale_dost12?igsh=MWg1NWprNzltZjJ4dg==",
+                buttonText = "FOLLOW",
+                description = "Get short tricks, current affairs quiz and exam notification reels directly on Instagram!"
+            )
+        )
+    }
+
+    // Combine database banners with default banners
+    val displayBanners = remember(banners) {
+        if (banners.isEmpty()) {
+            defaultBanners
+        } else {
+            banners + defaultBanners
+        }
+    }
+
+    if (displayBanners.isEmpty()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(210.dp)
+                .shadow(8.dp, RoundedCornerShape(24.dp))
+                .clip(RoundedCornerShape(24.dp))
+                .background(Color(0xFF0F172A))
+                .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(24.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Notifications,
+                    contentDescription = null,
+                    tint = Color(0xFF6366F1),
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "No Announcement Available",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            }
+        }
+        return
+    }
+
+    val pagerState = androidx.compose.foundation.pager.rememberPagerState(pageCount = { displayBanners.size })
     val uriHandler = LocalUriHandler.current
-    LaunchedEffect(Unit) { while(true) { delay(5000); currentIndex = (currentIndex + 1) % banners.size } }
-    val banner = banners[currentIndex]
-    Card(modifier = Modifier.fillMaxWidth().height(160.dp), shape = RoundedCornerShape(16.dp)) {
-        Box {
-            val imageModel = if (banner.imageUrl.startsWith("/")) java.io.File(banner.imageUrl) else banner.imageUrl
-            Image(painter = rememberAsyncImagePainter(imageModel), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.Bottom) {
-                Text(banner.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                Button(onClick = { 
-                    if (banner.linkUrl.startsWith("http")) uriHandler.openUri(banner.linkUrl) 
-                    else onTabSelect(banner.linkUrl) 
-                }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1))) {
-                    Text(banner.buttonText, color = Color.White)
+
+    // Auto-scroll effect: exactly 4 seconds
+    LaunchedEffect(displayBanners.size) {
+        while (true) {
+            delay(4000)
+            if (displayBanners.isNotEmpty() && pagerState.pageCount > 0) {
+                val nextPage = (pagerState.currentPage + 1) % pagerState.pageCount
+                pagerState.animateScrollToPage(nextPage)
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(210.dp)
+            .shadow(12.dp, RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(24.dp))
+            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(24.dp))
+    ) {
+        androidx.compose.foundation.pager.HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize()
+        ) { page ->
+            val banner = displayBanners[page]
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable {
+                        if (banner.linkUrl.startsWith("http")) {
+                            uriHandler.openUri(banner.linkUrl)
+                        } else {
+                            onTabSelect(banner.linkUrl)
+                        }
+                    }
+            ) {
+                // Background Image
+                val imagePainter = when {
+                    banner.imageUrl.contains("img_banner_telegram") -> painterResource(R.drawable.img_banner_telegram_1783264931077)
+                    banner.imageUrl.contains("img_banner_youtube") -> painterResource(R.drawable.img_banner_youtube_1783264956533)
+                    banner.imageUrl.contains("img_banner_whatsapp") -> painterResource(R.drawable.img_banner_whatsapp_1783264919547)
+                    banner.imageUrl.contains("img_banner_instagram") -> painterResource(R.drawable.img_banner_instagram_1783264944727)
+                    else -> {
+                        val resolvedUrl = com.example.service.MediaStorageServiceFactory.getService(context).resolveMediaUrl(banner.imageUrl)
+                        val imageModel = if (resolvedUrl.startsWith("/")) java.io.File(resolvedUrl) else resolvedUrl
+                        android.util.Log.d("BannerCarousel", "[BANNER RENDERING] ID: ${banner.id}, Title: '${banner.title}'")
+                        android.util.Log.d("BannerCarousel", "[BANNER RENDERING] Raw Image URL: '${banner.imageUrl}'")
+                        android.util.Log.d("BannerCarousel", "[BANNER RENDERING] Resolved Image URL: '$resolvedUrl'")
+                        
+                        rememberAsyncImagePainter(
+                            model = imageModel,
+                            onState = { state ->
+                                when (state) {
+                                    is coil.compose.AsyncImagePainter.State.Success -> {
+                                        android.util.Log.i("BannerCarousel", "[BANNER LOAD SUCCESS] ID: ${banner.id}, URL: '$resolvedUrl'")
+                                    }
+                                    is coil.compose.AsyncImagePainter.State.Error -> {
+                                        android.util.Log.e("BannerCarousel", "[BANNER LOAD FAILED] ID: ${banner.id}, URL: '$resolvedUrl'")
+                                        android.util.Log.e("BannerCarousel", "[BANNER LOAD ERROR] Exception: ${state.result.throwable.message}")
+                                    }
+                                    is coil.compose.AsyncImagePainter.State.Loading -> {
+                                        android.util.Log.d("BannerCarousel", "[BANNER LOADING] ID: ${banner.id}")
+                                    }
+                                    else -> {}
+                                }
+                            }
+                        )
+                    }
+                }
+                
+                Image(
+                    painter = imagePainter,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+                
+                // Bottom dark gradient overlay for optimal legibility
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    Color.Black.copy(alpha = 0.4f),
+                                    Color.Black.copy(alpha = 0.9f)
+                                ),
+                                startY = 10f
+                            )
+                        )
+                )
+                
+                // Bottom Overlay Bar containing info and CTA
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .padding(horizontal = 16.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        val platformInfo = getPlatformInfo(banner.linkUrl, banner.title)
+                        // Rounded Platform Icon Box
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .shadow(4.dp, RoundedCornerShape(14.dp))
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(platformInfo.color)
+                                .padding(10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = platformInfo.icon,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        
+                        Spacer(modifier = Modifier.width(12.dp))
+                        
+                        Column(verticalArrangement = Arrangement.Center) {
+                            Text(
+                                text = banner.title,
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (banner.description.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = banner.description,
+                                    color = Color.White.copy(alpha = 0.8f),
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.width(12.dp))
+                    
+                    // Large premium CTA button on the right
+                    Box(
+                        modifier = Modifier
+                            .shadow(4.dp, RoundedCornerShape(50.dp))
+                            .clip(RoundedCornerShape(50.dp))
+                            .background(
+                                Brush.horizontalGradient(
+                                    colors = listOf(
+                                        Color(0xFF6366F1), // Indigo
+                                        Color(0xFF4F46E5)  // Deep Indigo
+                                    )
+                                )
+                            )
+                            .clickable {
+                                if (banner.linkUrl.startsWith("http")) {
+                                    uriHandler.openUri(banner.linkUrl)
+                                } else {
+                                    onTabSelect(banner.linkUrl)
+                                }
+                            }
+                            .padding(horizontal = 20.dp, vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (banner.buttonText.isNotEmpty()) banner.buttonText.uppercase() else "VIEW",
+                            color = Color.White,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 11.sp,
+                            letterSpacing = 0.5.sp
+                        )
+                    }
+                }
+            }
+        }
+
+        // Custom indicator capsule at the top-right
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(16.dp)
+                .clip(RoundedCornerShape(50.dp))
+                .background(Color.Black.copy(alpha = 0.4f))
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                repeat(displayBanners.size) { index ->
+                    val isSelected = pagerState.currentPage == index
+                    Box(
+                        modifier = Modifier
+                            .width(if (isSelected) 14.dp else 6.dp)
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(100.dp))
+                            .background(if (isSelected) Color(0xFF818CF8) else Color.White.copy(alpha = 0.5f))
+                    )
                 }
             }
         }
@@ -299,97 +655,130 @@ fun StudentLessonsMediaWorkspace(course: CourseEntity, completedCount: Int, view
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT
                 )
+                window.decorView.setPadding(0, 0, 0, 0)
                 val controller = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
                 if (isFullScreen) {
                     window.setDimAmount(0f)
+                    window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.BLACK))
                     androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
-                    controller.hide(androidx.core.view.WindowInsetsCompat.Type.statusBars() or androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+                    controller.hide(androidx.core.view.WindowInsetsCompat.Type.statusBars() or androidx.core.view.WindowInsetsCompat.Type.navigationBars() or androidx.core.view.WindowInsetsCompat.Type.systemBars())
                     controller.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                        val attrs = window.attributes
+                        attrs.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                        window.attributes = attrs
+                    }
                 } else {
                     window.setDimAmount(0.5f)
+                    window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
                     androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, true)
                     controller.show(androidx.core.view.WindowInsetsCompat.Type.statusBars() or androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                        val attrs = window.attributes
+                        attrs.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                        window.attributes = attrs
+                    }
                 }
             }
         }
         
-        Scaffold(
-            contentWindowInsets = if (isFullScreen) WindowInsets(0.dp) else ScaffoldDefaults.contentWindowInsets,
-            topBar = {
-                if (!isFullScreen) {
-                    TopAppBar(
-                        title = { Text(course.title) },
-                        navigationIcon = { IconButton(onClick = { if (navStack.size > 1) navStack = navStack.dropLast(1) else onDismiss() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } }
-                    )
-                }
-            }
-        ) { padding ->
-            Box(modifier = Modifier.padding(if (isFullScreen) PaddingValues(0.dp) else padding)) {
-                when (currentScreen) {
-                    is ClassroomState.SubjectList -> {
-                        val subjects = lessons.map { it.chapterName }.distinct()
-                        LazyColumn { 
-                            items(subjects) { sub -> 
-                                ListItem(
-                                    headlineContent = { Text(sub, fontWeight = FontWeight.SemiBold) },
-                                    leadingContent = { Icon(Icons.Default.Folder, tint = Color(0xFFEAB308), contentDescription = null) },
-                                    trailingContent = { Icon(Icons.Default.KeyboardArrowRight, null) },
-                                    modifier = Modifier.clickable { navStack = navStack + ClassroomState.TopicFolderList(sub) }
-                                )
-                                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp)
-                            } 
-                        }
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+            if (isFullScreen && currentScreen is ClassroomState.LessonMediaCenter) {
+                VideoPlayerView(
+                    lesson = currentScreen.lesson, 
+                    isFullScreen = isFullScreen,
+                    onFullScreenToggle = { isFullScreen = it },
+                    isAdmin = (viewModel.currentUser?.role == "ADMIN")
+                )
+            } else {
+                Scaffold(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    contentWindowInsets = ScaffoldDefaults.contentWindowInsets,
+                    topBar = {
+                        TopAppBar(
+                            title = { Text(course.title) },
+                            navigationIcon = { IconButton(onClick = { if (navStack.size > 1) navStack = navStack.dropLast(1) else onDismiss() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } }
+                        )
                     }
-                    is ClassroomState.TopicFolderList -> {
-                        val foldersInSubject = lessons.filter { it.chapterName == currentScreen.subjectName }.map { it.folder }.distinct()
-                        LazyColumn {
-                            item { ListItem(headlineContent = { Text(currentScreen.subjectName, color = Color.Gray, fontSize = 12.sp) }) }
-                            items(foldersInSubject) { folder ->
-                                ListItem(
-                                    headlineContent = { Text(folder, fontWeight = FontWeight.SemiBold) },
-                                    leadingContent = { Icon(Icons.Default.PlayCircleOutline, tint = Color(0xFF6366F1), contentDescription = null) },
-                                    trailingContent = { Icon(Icons.Default.KeyboardArrowRight, null) },
-                                    modifier = Modifier.clickable { navStack = navStack + ClassroomState.VideoLectureList(currentScreen.subjectName, folder) }
-                                )
-                                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp)
+                ) { padding ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Transparent)
+                            .padding(padding)
+                    ) {
+                        when (currentScreen) {
+                            is ClassroomState.SubjectList -> {
+                                val subjects = lessons.map { it.chapterName }.distinct()
+                                LazyColumn { 
+                                    items(subjects) { sub -> 
+                                        ListItem(
+                                            headlineContent = { Text(sub, fontWeight = FontWeight.SemiBold) },
+                                            leadingContent = { Icon(Icons.Default.Folder, tint = Color(0xFFEAB308), contentDescription = null) },
+                                            trailingContent = { Icon(Icons.Default.KeyboardArrowRight, null) },
+                                            modifier = Modifier.clickable { navStack = navStack + ClassroomState.TopicFolderList(sub) }
+                                        )
+                                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp)
+                                    } 
+                                }
                             }
-                        }
-                    }
-                    is ClassroomState.VideoLectureList -> {
-                        val matching = lessons.filter { it.chapterName == currentScreen.subjectName && it.folder == currentScreen.folderName }
-                        LazyColumn {
-                            item { ListItem(headlineContent = { Text("${currentScreen.subjectName} > ${currentScreen.folderName}", color = Color.Gray, fontSize = 12.sp) }) }
-                            items(matching) { lesson ->
-                                LessonSelectionRow(lesson = lesson, onSelect = { navStack = navStack + ClassroomState.LessonMediaCenter(lesson) })
-                                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp)
+                            is ClassroomState.TopicFolderList -> {
+                                val foldersInSubject = lessons.filter { it.chapterName == currentScreen.subjectName }.map { it.folder }.distinct()
+                                LazyColumn {
+                                    item { ListItem(headlineContent = { Text(currentScreen.subjectName, color = Color.Gray, fontSize = 12.sp) }) }
+                                    items(foldersInSubject) { folder ->
+                                        ListItem(
+                                            headlineContent = { Text(folder, fontWeight = FontWeight.SemiBold) },
+                                            leadingContent = { Icon(Icons.Default.PlayCircleOutline, tint = Color(0xFF6366F1), contentDescription = null) },
+                                            trailingContent = { Icon(Icons.Default.KeyboardArrowRight, null) },
+                                            modifier = Modifier.clickable { navStack = navStack + ClassroomState.VideoLectureList(currentScreen.subjectName, folder) }
+                                        )
+                                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp)
+                                    }
+                                }
                             }
-                        }
-                    }
-                    is ClassroomState.LessonMediaCenter -> {
-                        Column(modifier = if(isFullScreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
-                            VideoPlayerView(
-                                lesson = currentScreen.lesson, 
-                                isFullScreen = isFullScreen,
-                                onFullScreenToggle = { isFullScreen = it },
-                                isAdmin = (viewModel.currentUser?.role == "ADMIN")
-                            )
-                            if (!isFullScreen) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    Text(currentScreen.lesson.title, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                                    Text(currentScreen.lesson.chapterName, fontSize = 14.sp, color = Color.Gray)
-                                    Spacer(modifier = Modifier.height(16.dp))
-                                    val mediaContext = LocalContext.current
-                                    Button(
-                                        onClick = { 
-                                            activePdfReadingLesson = currentScreen.lesson 
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(8.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1))
-                                    ) {
-                                        Icon(Icons.Default.Description, null)
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Read Class Notes (PDF)")
+                            is ClassroomState.VideoLectureList -> {
+                                val matching = lessons.filter { it.chapterName == currentScreen.subjectName && it.folder == currentScreen.folderName }
+                                LazyColumn {
+                                    item { ListItem(headlineContent = { Text("${currentScreen.subjectName} > ${currentScreen.folderName}", color = Color.Gray, fontSize = 12.sp) }) }
+                                    items(matching) { lesson ->
+                                        LessonSelectionRow(lesson = lesson, onSelect = { navStack = navStack + ClassroomState.LessonMediaCenter(lesson) })
+                                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp)
+                                    }
+                                }
+                            }
+                            is ClassroomState.LessonMediaCenter -> {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    VideoPlayerView(
+                                        lesson = currentScreen.lesson, 
+                                        isFullScreen = isFullScreen,
+                                        onFullScreenToggle = { isFullScreen = it },
+                                        isAdmin = (viewModel.currentUser?.role == "ADMIN")
+                                    )
+                                    Column(modifier = Modifier.padding(16.dp)) {
+                                        Text(currentScreen.lesson.title, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(currentScreen.lesson.chapterName, fontSize = 14.sp, color = Color.Gray, modifier = Modifier.weight(1f))
+                                            VideoViewCountDisplay(videoUrl = currentScreen.lesson.videoUrl)
+                                        }
+                                        Spacer(modifier = Modifier.height(16.dp))
+                                        val mediaContext = LocalContext.current
+                                        Button(
+                                            onClick = { 
+                                                activePdfReadingLesson = currentScreen.lesson 
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            shape = RoundedCornerShape(8.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1))
+                                        ) {
+                                            Icon(Icons.Default.Description, null)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("Read Class Notes (PDF)")
+                                        }
                                     }
                                 }
                             }
@@ -446,7 +835,13 @@ fun StudentTestHubMain(viewModel: AcademyViewModel) {
         viewModel.generateWeeklyMockTests()
     }
 
-    val tests by viewModel.allTests.collectAsStateWithLifecycle()
+    val testsRaw by viewModel.allTests.collectAsStateWithLifecycle()
+    val tests = remember(testsRaw) {
+        testsRaw.filter {
+            (it.title.startsWith("AI 2.0 Mock Test") && it.type == "Mock Test") ||
+            (it.title.startsWith("Weekly Mock Test - ") && it.type == "Weekly Auto Test")
+        }
+    }
     val scores by viewModel.allScores.collectAsStateWithLifecycle()
     val userScoreMap = scores.filter { it.userEmail == viewModel.currentUser?.email }.associateBy { it.testId }
 
@@ -509,6 +904,14 @@ fun ActiveTestScreen(viewModel: AcademyViewModel) {
     val progress = viewModel.activeTestProgress ?: return
     val currentQuestion = progress.questions.getOrNull(progress.currentQuestionIndex)
     var testLanguage by remember { mutableStateOf("BOTH") } // "ENG", "HIN", "BOTH"
+    
+    val testContext = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(1000L)
+            com.example.util.StudyTracker.addStudyTime(testContext, 1)
+        }
+    }
     
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
@@ -616,20 +1019,223 @@ fun ActiveTestScreen(viewModel: AcademyViewModel) {
 fun TestResultScreen(viewModel: AcademyViewModel) {
     val progress = viewModel.activeTestProgress ?: return
     val score = progress.testScore ?: return // Must have score to view result
+    val scores by viewModel.allScores.collectAsStateWithLifecycle()
     var testLanguage by remember { mutableStateOf("BOTH") } // "ENG", "HIN", "BOTH"
     
-    Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text("Performance Report") }, navigationIcon = { IconButton(onClick = { viewModel.exitTest() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } })
-        
-        Column(modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
-            Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color(0xFFF9FAFB))) {
-                Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Total Score: ${score.score}", fontWeight = FontWeight.Bold, fontSize = 24.sp, color = Color(0xFF6366F1))
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("Correct: ${score.correctAnswers}  |  Wrong: ${score.wrongAnswers}  |  Unattempted: ${score.totalQuestions - (score.correctAnswers + score.wrongAnswers)}", color = Color.Gray, fontSize=14.sp)
+    // Performance breakdown
+    val totalQs = progress.questions.size
+    val correct = score.correctAnswers
+    val wrong = score.wrongAnswers
+    val skipped = totalQs - (correct + wrong)
+    val percentage = if (totalQs > 0) (correct.toFloat() / totalQs) * 100f else 0f
+    
+    // Dynamic Rank calculation
+    val rank = remember(scores) {
+        val testScores = scores.filter { it.testId == progress.test.id }.sortedByDescending { it.score }
+        val index = testScores.indexOfFirst { it.userEmail == score.userEmail && it.score == score.score }
+        if (index != -1) index + 1 else 1
+    }
+    
+    // Time Taken calculation
+    val timeTakenSeconds = progress.test.durationMinutes * 60 - progress.secondsRemaining
+    val timeTakenStr = "${timeTakenSeconds / 60}m ${timeTakenSeconds % 60}s"
+    
+    // Subject-wise performance grouping
+    val subjectPerformanceList = remember(progress.questions) {
+        val questionsBySubject = progress.questions.groupBy { q ->
+            try {
+                com.example.service.parseQuestionMetadata(q.questionText).subject.split("/")[0].trim()
+            } catch (e: Exception) {
+                "General"
+            }
+        }
+        questionsBySubject.map { (subject, qList) ->
+            var subCorrect = 0
+            var subWrong = 0
+            qList.forEach { q ->
+                val selectedIdx = progress.selectedAnswers[q.id]
+                if (selectedIdx == q.correctIndex) {
+                    subCorrect++
+                } else if (selectedIdx != null && selectedIdx != -1) {
+                    subWrong++
                 }
             }
-            Spacer(modifier = Modifier.height(24.dp))
+            val subTotal = qList.size
+            val subPercentage = if (subTotal > 0) (subCorrect.toFloat() / subTotal) * 100f else 0f
+            Triple(subject, subCorrect to subTotal, subPercentage)
+        }
+    }
+    
+    val strongSubjects = subjectPerformanceList.filter { it.third >= 70f }.map { it.first }
+    val weakSubjects = subjectPerformanceList.filter { it.third < 70f }.map { it.first }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text("Performance Report") },
+            navigationIcon = {
+                IconButton(onClick = { viewModel.exitTest() }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, null)
+                }
+            }
+        )
+        
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Dashboard overview card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Score Analysis",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text("Marks Scored", fontSize = 12.sp, color = Color.Gray)
+                            Text("$correct / $totalQs", fontWeight = FontWeight.Bold, fontSize = 24.sp, color = Color(0xFF6366F1))
+                        }
+                        Column {
+                            Text("Percentage", fontSize = 12.sp, color = Color.Gray)
+                            Text(String.format("%.1f%%", percentage), fontWeight = FontWeight.Bold, fontSize = 24.sp, color = Color(0xFF10B981))
+                        }
+                        Column {
+                            Text("Rank", fontSize = 12.sp, color = Color.Gray)
+                            Text("#$rank", fontWeight = FontWeight.Bold, fontSize = 24.sp, color = Color(0xFFF59E0B))
+                        }
+                    }
+                    
+                    Divider(modifier = Modifier.padding(vertical = 12.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Correct", fontSize = 11.sp, color = Color.Gray)
+                            Text("$correct", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color(0xFF10B981))
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Wrong", fontSize = 11.sp, color = Color.Gray)
+                            Text("$wrong", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.Red)
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Skipped", fontSize = 11.sp, color = Color.Gray)
+                            Text("$skipped", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.Gray)
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Time Taken", fontSize = 11.sp, color = Color.Gray)
+                            Text(timeTakenStr, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.DarkGray)
+                        }
+                    }
+                }
+            }
+            
+            // Subject performance card
+            if (subjectPerformanceList.isNotEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Subject-wise Performance",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        subjectPerformanceList.forEach { (subj, scorePair, pct) ->
+                            Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(subj, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                                    Text("${scorePair.first}/${scorePair.second} (${String.format("%.0f%%", pct)})", fontSize = 12.sp, color = Color.Gray)
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                LinearProgressIndicator(
+                                    progress = { pct / 100f },
+                                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)),
+                                    color = if (pct >= 70f) Color(0xFF10B981) else if (pct >= 40f) Color(0xFFF59E0B) else Color.Red
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Weak / Strong Subjects tags
+            if (strongSubjects.isNotEmpty() || weakSubjects.isNotEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Strengths & Focus Areas",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        if (strongSubjects.isNotEmpty()) {
+                            Text("Strong Subjects (>= 70%):", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF10B981))
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                strongSubjects.forEach { subj ->
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .background(Color(0xFFD1FAE5))
+                                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(subj, fontSize = 11.sp, color = Color(0xFF065F46), fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (weakSubjects.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text("Needs Focus (< 70%):", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.Red)
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                weakSubjects.forEach { subj ->
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .background(Color(0xFFFEE2E2))
+                                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(subj, fontSize = 11.sp, color = Color(0xFF991B1B), fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // Language toggle row for review
             Row(
@@ -661,18 +1267,28 @@ fun TestResultScreen(viewModel: AcademyViewModel) {
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Text("Detailed Question Review:", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            Spacer(modifier = Modifier.height(16.dp))
             
             progress.questions.forEachIndexed { i, q ->
                 val selectedIdx = progress.selectedAnswers[q.id]
                 val isCorrect = selectedIdx == q.correctIndex
+                val metadata = remember(q.questionText) {
+                    try {
+                        com.example.service.parseQuestionMetadata(q.questionText)
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
                 
-                Card(modifier = Modifier.fillMaxWidth().padding(vertical=4.dp), colors = CardDefaults.cardColors(containerColor = Color.White), border = BorderStroke(1.dp, Color.LightGray)) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    border = BorderStroke(1.dp, Color.LightGray.copy(alpha = 0.5f))
+                ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("Q${i+1}. ${formatQuestionOrOptionText(q.questionText, testLanguage)}", fontWeight=FontWeight.SemiBold)
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         
                         val ops = listOf(q.optionA, q.optionB, q.optionC, q.optionD)
                         ops.forEachIndexed { opIdx, opTxt ->
@@ -699,6 +1315,34 @@ fun TestResultScreen(viewModel: AcademyViewModel) {
                                  Icon(ic, null, modifier = Modifier.size(16.dp), tint = cColor)
                                  Spacer(modifier = Modifier.width(8.dp))
                                  Text(formatQuestionOrOptionText(opTxt, testLanguage), color = if(isCorrectAnswer || isUserSelected) Color.Black else Color.Gray)
+                             }
+                             Spacer(modifier = Modifier.height(4.dp))
+                         }
+                         
+                         // Detailed solution & explanation
+                         if (metadata != null && metadata.explanation.isNotBlank()) {
+                             Spacer(modifier = Modifier.height(12.dp))
+                             Box(
+                                 modifier = Modifier
+                                     .fillMaxWidth()
+                                     .clip(RoundedCornerShape(8.dp))
+                                     .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f))
+                                     .padding(12.dp)
+                             ) {
+                                 Column {
+                                     Text(
+                                         text = "Detailed Solution / समाधान:",
+                                         fontWeight = FontWeight.Bold,
+                                         fontSize = 12.sp,
+                                         color = MaterialTheme.colorScheme.primary
+                                     )
+                                     Spacer(modifier = Modifier.height(4.dp))
+                                     Text(
+                                         text = formatQuestionOrOptionText(metadata.explanation, testLanguage),
+                                         fontSize = 12.sp,
+                                         color = MaterialTheme.colorScheme.onSurface
+                                     )
+                                 }
                              }
                          }
                      }
@@ -774,12 +1418,34 @@ fun StudentProfileView(viewModel: AcademyViewModel) {
         
         Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("Follow Us", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF6366F1))
+                Text("Official Channels & Socials", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF6366F1))
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), thickness = 0.5.dp)
                 
                 Row(
                     modifier = Modifier.fillMaxWidth().clickable {
-                        uriHandler.openUri("https://www.instagram.com/lakshya_academy_sirgitha_gzpr?igsh=MXU5eHVicWRhNmgwag==")
+                        uriHandler.openUri("https://chat.whatsapp.com/JDHYEnF8rQP3D0kIeH3Qoj?s=cl&p=a&ilr=2")
+                    }.padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Chat, contentDescription = null, tint = Color(0xFF25D366), modifier = Modifier.size(24.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text("Join WhatsApp Group", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                }
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable {
+                        uriHandler.openUri("https://t.me/+k9fhlPovsDE5ZDI1")
+                    }.padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Send, contentDescription = null, tint = Color(0xFF229ED9), modifier = Modifier.size(24.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text("Join Telegram Channel", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable {
+                        uriHandler.openUri("https://www.instagram.com/toon_waale_dost12?igsh=MWg1NWprNzltZjJ4dg==")
                     }.padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {

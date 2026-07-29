@@ -38,11 +38,34 @@ fun MaterialDocumentViewerDialog(
     viewModel: AcademyViewModel,
     onDismiss: () -> Unit
 ) {
+    val normalized = type.trim().lowercase()
+    if (normalized.contains("syllabus")) {
+        FolderExplorerDialog(
+            module = com.example.data.FolderModule.SYLLABUS,
+            viewModel = viewModel,
+            onDismiss = onDismiss
+        )
+        return
+    }
+    if (normalized.contains("previous") || normalized.contains("pyp")) {
+        FolderExplorerDialog(
+            module = com.example.data.FolderModule.PREVIOUS_PAPERS,
+            viewModel = viewModel,
+            onDismiss = onDismiss
+        )
+        return
+    }
+    if (normalized.contains("book")) {
+        FolderExplorerDialog(
+            module = com.example.data.FolderModule.FREE_BOOKS,
+            viewModel = viewModel,
+            onDismiss = onDismiss
+        )
+        return
+    }
+
     val documentsFlow = when (type) {
-        "Book" -> viewModel.booksList
-        "Syllabus" -> viewModel.syllabusList
         "Timetable" -> viewModel.timetableList
-        "Previous Year Paper" -> viewModel.pypList
         else -> viewModel.currentAffairsList
     }
     val docs by documentsFlow.collectAsStateWithLifecycle()
@@ -105,13 +128,33 @@ fun CourseDetailEnrollmentDialog(
     val enrollments by viewModel.allEnrollments.collectAsStateWithLifecycle()
     val isEnrolled = enrollments.any { it.userEmail == viewModel.currentUser?.email && it.courseId == course.id }
     var showRazorpaySimulator by remember { mutableStateOf(false) }
+    val displayImageUrl = remember(course.imageUrl, course.id, course.title) {
+        when {
+            course.id == 7 || course.title.contains("AIRFORCE", ignoreCase = true) -> {
+                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/lms_1783610971221.jpg"
+            }
+            course.id == 10 || course.title.contains("9th Class", ignoreCase = true) || course.title.contains("9th", ignoreCase = true) -> {
+                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/WhatsApp%20Image%202026-07-11%20at%202.03.25%20PM.jpeg"
+            }
+            course.id == 11 || course.title.contains("12th", ignoreCase = true) -> {
+                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/12TH%20.jpeg"
+            }
+            course.id == 12 || course.title.contains("10th Class", ignoreCase = true) || course.title.contains("10th", ignoreCase = true) -> {
+                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/10TH%20.png"
+            }
+            course.id == 6 || course.title.contains("Toppers Batch", ignoreCase = true) || course.title.contains("PCB 11th Class", ignoreCase = true) -> {
+                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/lms_1783656408082.jpg"
+            }
+            else -> course.imageUrl
+        }
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp), shape = RoundedCornerShape(20.dp)) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Box(modifier = Modifier.fillMaxWidth().height(180.dp)) {
-                    if (course.imageUrl.isNotEmpty()) {
-                        AsyncImage(model = course.imageUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                    if (displayImageUrl.isNotEmpty()) {
+                        AsyncImage(model = displayImageUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                     } else {
                         Box(modifier = Modifier.fillMaxSize().background(BrandBluePrimary), contentAlignment = Alignment.Center) {
                             Icon(Icons.Default.School, contentDescription = null, modifier = Modifier.size(60.dp), tint = Color.White)

@@ -5,6 +5,8 @@ import org.junit.Assert.*
 import com.example.ui.screens.detectVideoSourceType
 import com.example.ui.screens.extractYouTubeVideoId
 import com.example.ui.screens.convertDriveUrl
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 
 class ExampleUnitTest {
   @Test
@@ -51,12 +53,147 @@ class ExampleUnitTest {
 
   @Test
   fun testYouTubeExtractionAndThumbnail() {
-    val inputUrl = "https://youtu.be/dQw4w9WgXcQ"
+    val inputUrl = "https://youtu.be/EWAI1fi3k7Y"
     val extractedId = extractYouTubeVideoId(inputUrl)
-    assertEquals("dQw4w9WgXcQ", extractedId)
+    assertEquals("EWAI1fi3k7Y", extractedId)
     
     val generatedThumbnail = "https://img.youtube.com/vi/$extractedId/hqdefault.jpg"
-    assertEquals("https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg", generatedThumbnail)
+    assertEquals("https://img.youtube.com/vi/EWAI1fi3k7Y/hqdefault.jpg", generatedThumbnail)
+  }
+
+  @Test
+  fun testB2Connection() {
+    val creds = com.example.api.BackblazeB2Manager.Credentials(
+      b2BucketName = "lakshyaacademy",
+      b2AccessKeyId = "0051b27e56190ee0000000002",
+      b2SecretAccessKey = "K005uux3V6ogoTTUzRJ3eyPN2bwdde4",
+      b2Endpoint = "s3.us-east-005.backblazeb2.com"
+    )
+
+    println("=== STARTING BACKBLAZE B2 VERIFICATION TEST ===")
+    println("Bucket: ${creds.b2BucketName}")
+    println("Endpoint: ${creds.b2Endpoint}")
+    println("Key ID: ${creds.b2AccessKeyId}")
+
+    val report = com.example.api.BackblazeB2Manager.verifyB2Connection(creds)
+
+    println("=== B2 VERIFICATION REPORT ===")
+    println("Connection Successful: ${report.connectionSuccess}")
+    println("Bucket Access Successful: ${report.bucketAccessSuccess}")
+    println("Read Permission Successful: ${report.readSuccess}")
+    println("Write Permission (Upload temp) Successful: ${report.writeSuccess}")
+    println("Delete Permission (Cleanup) Successful: ${report.deleteSuccess}")
+    if (report.errorMessage != null) {
+      println("Error Details: ${report.errorMessage}")
+    }
+    println("================================================")
+
+    assertTrue("Connection verification failed: ${report.errorMessage}", report.connectionSuccess)
+    assertTrue("Bucket access verification failed: ${report.errorMessage}", report.bucketAccessSuccess)
+    assertTrue("Read permission verification failed: ${report.errorMessage}", report.readSuccess)
+    assertTrue("Write permission verification failed: ${report.errorMessage}", report.writeSuccess)
+    assertTrue("Delete permission verification failed: ${report.errorMessage}", report.deleteSuccess)
+    assertTrue("Verification not fully successful", report.isFullySuccessful())
+
+    // Let's test getPresignedUrl specifically
+    val testKey = "b2_presigned_test_${System.currentTimeMillis()}.txt"
+    val host = creds.host
+    val bucket = creds.b2BucketName
+    val region = creds.region
+    val keyId = creds.b2AccessKeyId
+    val secret = creds.b2SecretAccessKey
+
+    val okClient = okhttp3.OkHttpClient.Builder()
+      .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+      .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+      .build()
+
+    println("=== TESTING PRESIGNED GET URL ===")
+    
+    // 1. Upload a temp test file
+    val putUrl = "https://$host/$bucket/$testKey"
+    val putCanonicalUri = "/$bucket/$testKey"
+    val testContent = "Test content for presigned GET URL verification"
+    val putBody = testContent.toRequestBody("text/plain".toMediaTypeOrNull())
+
+    val putHeaders = com.example.api.BackblazeB2Manager.B2Signer.getSignatureHeaders(
+      method = "PUT",
+      host = host,
+      canonicalUri = putCanonicalUri,
+      queryParams = emptyMap(),
+      accessKeyId = keyId,
+      secretAccessKey = secret,
+      region = region
+    )
+
+    val putRequest = okhttp3.Request.Builder()
+      .url(putUrl)
+      .put(putBody)
+      .apply {
+        putHeaders.forEach { (k, v) -> addHeader(k, v) }
+      }
+      .build()
+
+    okClient.newCall(putRequest).execute().use { response ->
+      assertTrue("Failed to upload test object for presigned URL test: ${response.code}", response.isSuccessful)
+    }
+
+    // 2. Generate a presigned GET URL using getPresignedUrl
+    val presignedUrl = com.example.api.BackblazeB2Manager.getPresignedUrl(
+      host = host,
+      bucketName = bucket,
+      objectKey = testKey,
+      accessKeyId = keyId,
+      secretAccessKey = secret,
+      region = region,
+      expiresInSeconds = 3600
+    )
+
+    println("Generated Presigned URL (passed to ExoPlayer):")
+    println(presignedUrl)
+
+    // 3. Test HTTP Status of generated presigned URL
+    val getRequest = okhttp3.Request.Builder()
+      .url(presignedUrl)
+      .get()
+      .build()
+
+    var getStatusCode = -1
+    var responseBody = ""
+    okClient.newCall(getRequest).execute().use { response ->
+      getStatusCode = response.code
+      responseBody = response.body?.string() ?: ""
+    }
+
+    println("GET Request HTTP Status Code: $getStatusCode")
+    if (getStatusCode != 200) {
+      println("Response Content: $responseBody")
+    }
+
+    // 4. Cleanup/Delete
+    val deleteUrl = "https://$host/$bucket/$testKey"
+    val deleteCanonicalUri = "/$bucket/$testKey"
+    val deleteHeaders = com.example.api.BackblazeB2Manager.B2Signer.getSignatureHeaders(
+      method = "DELETE",
+      host = host,
+      canonicalUri = deleteCanonicalUri,
+      queryParams = emptyMap(),
+      accessKeyId = keyId,
+      secretAccessKey = secret,
+      region = region
+    )
+    val deleteRequest = okhttp3.Request.Builder()
+      .url(deleteUrl)
+      .delete()
+      .apply {
+        deleteHeaders.forEach { (k, v) -> addHeader(k, v) }
+      }
+      .build()
+    okClient.newCall(deleteRequest).execute().use { response ->
+      println("Temp object cleanup status: ${response.code}")
+    }
+
+    assertEquals("Presigned URL GET check failed with status $getStatusCode", 200, getStatusCode)
   }
 }
 

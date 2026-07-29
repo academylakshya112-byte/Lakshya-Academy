@@ -46,65 +46,75 @@ import com.example.ui.viewmodel.AcademyViewModel
 @Composable
 fun Academic3x3GridDashboard(onTabSelect: (String) -> Unit) {
     val items = listOf(
-        Triple("Course Syllabus", Icons.Default.LibraryBooks, "COURSES"),
+        Triple("Live Classes", Icons.Default.LiveTv, "live_classes"),
+        Triple("Course Syllabus", Icons.Default.LibraryBooks, "syllabus"),
+        Triple("Lakshya AI Coach", Icons.Default.AutoAwesome, "doubt_solver"),
         Triple("Current Affairs", Icons.Default.Newspaper, "current_affairs"),
         Triple("Test Series", Icons.Default.Quiz, "TESTS"),
         Triple("Previous Papers", Icons.Default.HistoryEdu, "previous_papers"),
         Triple("Exam Alerts", Icons.Default.NotificationsActive, "ALERTS"),
         Triple("My Progress", Icons.Default.Leaderboard, "DASHBOARD"),
         Triple("Free Books", Icons.Default.AutoStories, "books"),
-        Triple("Time Table", Icons.Default.CalendarMonth, "timetable"),
-        Triple("Lakshya AI 5.0 Ultra", Icons.Default.Psychology, "doubt_solver"),
-        Triple("Account (Auth)", Icons.Default.AccountCircle, "firebase_auth")
+        Triple("Time Table", Icons.Default.CalendarMonth, "timetable")
     )
 
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(3),
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(320.dp),
-        contentPadding = PaddingValues(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        userScrollEnabled = false
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        items(items) { (label, icon, route) ->
-            Card(
-                onClick = { onTabSelect(route) },
-                modifier = Modifier.aspectRatio(1f),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        val rows = items.chunked(3)
+        rows.forEach { rowItems ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Box(
+                rowItems.forEach { (label, icon, route) ->
+                    Card(
+                        onClick = { onTabSelect(route) },
                         modifier = Modifier
-                            .size(42.dp)
-                            .clip(CircleShape)
-                            .background(BrandBluePrimary.copy(alpha = 0.08f)),
-                        contentAlignment = Alignment.Center
+                            .weight(1f)
+                            .aspectRatio(1f),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
                     ) {
-                        Icon(icon, contentDescription = label, tint = BrandBluePrimary, modifier = Modifier.size(20.dp))
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(CircleShape)
+                                    .background(BrandBluePrimary.copy(alpha = 0.08f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(icon, contentDescription = label, tint = BrandBluePrimary, modifier = Modifier.size(20.dp))
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = label,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center,
+                                lineHeight = 12.sp,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                        }
                     }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = label,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center,
-                        lineHeight = 12.sp,
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
+                }
+                if (rowItems.size < 3) {
+                    repeat(3 - rowItems.size) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
                 }
             }
         }
     }
 }
 
+@android.annotation.SuppressLint("NewApi")
 fun generateAndDownloadPdfFromText(context: android.content.Context, pdfName: String, pages: List<String>) {
     try {
         val pdfDocument = PdfDocument()
@@ -186,23 +196,35 @@ fun generateAndDownloadPdfFromText(context: android.content.Context, pdfName: St
         val sanitizedName = pdfName.replace("[\\\\/:*?\"<>|]".toRegex(), "_")
         val fileName = if (sanitizedName.endsWith(".pdf", ignoreCase = true)) sanitizedName else "$sanitizedName.pdf"
 
-        val values = ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-            put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+        val contentResolver = context.contentResolver
+        val downloadUri: android.net.Uri? = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
                 put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
             }
+            contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+        } else {
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (!downloadsDir.exists()) {
+                downloadsDir.mkdirs()
+            }
+            val file = java.io.File(downloadsDir, fileName)
+            android.net.Uri.fromFile(file)
         }
 
-        val contentResolver = context.contentResolver
-        val downloadUri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
         if (downloadUri == null) {
             Toast.makeText(context, "Failed to create Download file reference", Toast.LENGTH_SHORT).show()
             pdfDocument.close()
             return
         }
 
-        val outputStream: OutputStream? = contentResolver.openOutputStream(downloadUri)
+        val outputStream: OutputStream? = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            contentResolver.openOutputStream(downloadUri)
+        } else {
+            java.io.FileOutputStream(java.io.File(downloadUri.path ?: ""))
+        }
+
         if (outputStream == null) {
             Toast.makeText(context, "Failed to open output stream", Toast.LENGTH_SHORT).show()
             pdfDocument.close()
@@ -228,6 +250,14 @@ fun MockPdfViewerScreen(
     fileSize: String = "",
     onDismiss: () -> Unit
 ) {
+    val pdfContext = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(1000L)
+            com.example.util.StudyTracker.addStudyTime(pdfContext, 1)
+        }
+    }
+
     val pages = remember(customContent) {
         if (customContent.isBlank()) {
            val text = "Mock Study Notes Database\n\nTitle: $pdfName\n\nThis is a mock PDF document. In a real environment, this screen will render the actual pages of the PDF file you uploaded. Currently, no actual file content was provided or matched, so we are displaying this placeholder text. Please ensure you select a real PDF file when uploading."

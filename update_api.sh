@@ -1,0 +1,1 @@
+sed -i 's/@GET("rest\/v1\/lessons?select=\*&order=id.asc")/    @GET("rest\/v1\/lessons?select=*")\n    suspend fun getAllLessons(): List<LessonEntity>\n    @GET("rest\/v1\/lessons?select=*\&order=id.asc")/' app/src/main/java/com/example/api/SupabaseApi.kt

@@ -15,8 +15,8 @@ android {
     applicationId = "com.aistudio.lakshya_academy.gzkvpm"
     minSdk = 24
     targetSdk = 35
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 2
+    versionName = "1.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -66,66 +66,90 @@ android {
 // to match the convention used in Web projects.
 // Proactively generate .env from environment variables if present
 val envFile = rootProject.file(".env")
-var finalKey = ""
+
+// Keys we want to synchronize from system environment to .env
+val varsToSync = listOf(
+    "GEMINI_API_KEY",
+    "SUPABASE_URL",
+    "SUPABASE_ANON_KEY",
+    "SUPABASE_TABLE",
+    "R2_ACCOUNT_ID",
+    "R2_BUCKET_NAME",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+    "R2_PUBLIC_URL",
+    "STORAGE_PROVIDER",
+    "B2_ENDPOINT",
+    "B2_BUCKET_NAME",
+    "B2_APPLICATION_KEY_ID",
+    "B2_APPLICATION_KEY"
+)
+
+val resolvedVars = mutableMapOf<String, String>()
+
+// Pre-fill with placeholders or defaults
+varsToSync.forEach { key ->
+    resolvedVars[key] = when (key) {
+        "GEMINI_API_KEY" -> "YOUR_GEMINI_API_KEY"
+        "SUPABASE_URL" -> "YOUR_SUPABASE_URL"
+        "SUPABASE_ANON_KEY" -> "YOUR_SUPABASE_ANON_KEY"
+        "SUPABASE_TABLE" -> "videos"
+        "R2_ACCOUNT_ID" -> "YOUR_R2_ACCOUNT_ID"
+        "R2_BUCKET_NAME" -> "YOUR_R2_BUCKET_NAME"
+        "R2_ACCESS_KEY_ID" -> "YOUR_R2_ACCESS_KEY_ID"
+        "R2_SECRET_ACCESS_KEY" -> "YOUR_R2_SECRET_ACCESS_KEY"
+        "R2_PUBLIC_URL" -> "YOUR_R2_PUBLIC_URL"
+        "STORAGE_PROVIDER" -> "BACKBLAZE_B2"
+        "B2_ENDPOINT" -> "s3.us-east-005.backblazeb2.com"
+        "B2_BUCKET_NAME" -> "lakshyaacademy"
+        "B2_APPLICATION_KEY_ID" -> "0051b27e56190ee0000000002"
+        "B2_APPLICATION_KEY" -> "K005uux3V6ogoTTUzRJ3eyPN2bwdde4"
+        else -> ""
+    }
+}
 
 // 1. Try reading from existing .env file
 if (envFile.exists()) {
-    val lines = envFile.readLines()
-    for (line in lines) {
+    envFile.readLines().forEach { line ->
         val trimmed = line.trim()
-        if (trimmed.startsWith("GEMINI_API_KEY=")) {
-            val value = trimmed.substringAfter("GEMINI_API_KEY=").trim().removeSurrounding("\"").removeSurrounding("'").trim()
-            if (value.isNotBlank() && value != "YOUR_GEMINI_API_KEY") {
-                finalKey = value
-            }
-        } else if (trimmed.startsWith("MY_API_KEY=")) {
-            val value = trimmed.substringAfter("MY_API_KEY=").trim().removeSurrounding("\"").removeSurrounding("'").trim()
-            if (value.isNotBlank() && finalKey.isBlank()) {
-                finalKey = value
+        if (trimmed.contains("=") && !trimmed.startsWith("#")) {
+            val parts = trimmed.split("=", limit = 2)
+            val k = parts[0].trim()
+            val v = parts[1].trim().removeSurrounding("\"").removeSurrounding("'").trim()
+            if (varsToSync.contains(k) && v.isNotBlank()) {
+                resolvedVars[k] = v
             }
         }
     }
 }
 
-// 2. Try reading from environment variables (overrides or supplements .env)
-val envGemini = System.getenv("GEMINI_API_KEY") ?: ""
+// 2. Try reading from environment variables to override or supplement
+varsToSync.forEach { key ->
+    val envValue = System.getenv(key) ?: ""
+    val cleanedValue = envValue.trim().removeSurrounding("\"").removeSurrounding("'").trim()
+    if (cleanedValue.isNotBlank() && cleanedValue != "YOUR_${key}" && cleanedValue != "YOUR_GEMINI_API_KEY") {
+        resolvedVars[key] = cleanedValue
+    }
+}
+
+// Special check for older/alternate names
 val envMyKey = System.getenv("MY_API_KEY") ?: ""
-if (envGemini.isNotBlank() && envGemini != "YOUR_GEMINI_API_KEY") {
-    finalKey = envGemini.trim().removeSurrounding("\"").removeSurrounding("'").trim()
-} else if (envMyKey.isNotBlank() && finalKey.isBlank()) {
-    finalKey = envMyKey.trim().removeSurrounding("\"").removeSurrounding("'").trim()
+val cleanedMyKey = envMyKey.trim().removeSurrounding("\"").removeSurrounding("'").trim()
+if (cleanedMyKey.isNotBlank() && (resolvedVars["GEMINI_API_KEY"] == "YOUR_GEMINI_API_KEY" || resolvedVars["GEMINI_API_KEY"].isNullOrBlank())) {
+    resolvedVars["GEMINI_API_KEY"] = cleanedMyKey
 }
 
-// Ensure the final API key is set and cleaned
-finalKey = finalKey.trim().removeSurrounding("\"").removeSurrounding("'").trim()
+// Write everything back to .env
+val sb = StringBuilder()
+resolvedVars.forEach { (k, v) ->
+    sb.append("$k=$v\n")
+}
+envFile.writeText(sb.toString())
 
-if (finalKey.isNotBlank() && finalKey != "YOUR_GEMINI_API_KEY") {
-    // Read other variables in existing .env to preserve them
-    val otherProperties = mutableMapOf<String, String>()
-    if (envFile.exists()) {
-        envFile.readLines().forEach { line ->
-            val trimmed = line.trim()
-            if (trimmed.contains("=") && !trimmed.startsWith("#")) {
-                val parts = trimmed.split("=", limit = 2)
-                val key = parts[0].trim()
-                val value = parts[1].trim()
-                if (key != "GEMINI_API_KEY") {
-                    otherProperties[key] = value
-                }
-            }
-        }
-    }
-    
-    // Write everything back, ensuring GEMINI_API_KEY is present
-    val sb = StringBuilder()
-    sb.append("GEMINI_API_KEY=$finalKey\n")
-    otherProperties.forEach { (k, v) ->
-        sb.append("$k=$v\n")
-    }
-    envFile.writeText(sb.toString())
-    logger.lifecycle("GEMINI DEBUG: Resolved GEMINI_API_KEY successfully. Key prefix: ${finalKey.take(4)}")
-} else {
-    logger.lifecycle("GEMINI DEBUG: GEMINI_API_KEY could not be resolved from environment or .env file.")
+logger.lifecycle("BUILD CONFIG SYNC: Successfully wrote environment variables to .env")
+resolvedVars.forEach { (k, v) ->
+    val masked = if (v.length > 6) v.take(4) + "..." else v
+    logger.lifecycle("BUILD CONFIG SYNC: $k = $masked")
 }
 
 secrets {
@@ -136,7 +160,6 @@ secrets {
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
 dependencies {
-  implementation(libs.android.youtube.player.core)
   implementation(platform(libs.androidx.compose.bom))
   implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)
@@ -152,10 +175,12 @@ dependencies {
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
+  implementation(libs.androidx.core.splashscreen)
   implementation("androidx.security:security-crypto:1.1.0-alpha06")
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.ui)
   implementation(libs.androidx.media3.common)
+  implementation(libs.image.cropper)
   // implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)

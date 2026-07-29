@@ -4,227 +4,1125 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.animation.*
+import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.CourseEntity
-import com.example.data.LessonEntity
-import com.example.ui.theme.BrandBlueSecondary
+import com.example.api.R2SupabaseManager
+import com.example.api.SupabaseVideo
 import com.example.ui.viewmodel.AcademyViewModel
+import java.text.SimpleDateFormat
+import java.util.*
 
+// Helper metadata parser extensions for CourseEntity
+fun CourseEntity.getValidity(): String {
+    if (this.description.contains("Validity: ")) {
+        return this.description.substringAfter("Validity: ").substringBefore(" |").trim()
+    }
+    return "Lifetime"
+}
+
+fun CourseEntity.isActive(): Boolean {
+    if (this.description.contains("Status: ")) {
+        val status = this.description.substringAfter("Status: ").substringBefore(" |").trim()
+        return status.equals("Active", ignoreCase = true)
+    }
+    return true
+}
+
+fun CourseEntity.getRealDescription(): String {
+    if (this.description.contains(" | ")) {
+        return this.description.substringAfterLast(" | ").trim()
+    }
+    return this.description
+}
+
+fun buildBatchDescription(validity: String, isActive: Boolean, realDesc: String): String {
+    val status = if (isActive) "Active" else "Inactive"
+    return "Validity: $validity | Status: $status | $realDesc"
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AdminCourseManager(viewModel: AcademyViewModel) {
     val courses by viewModel.allCourses.collectAsStateWithLifecycle()
-    val currentLessons by viewModel.currentLessonList.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    var batchTitle by remember { mutableStateOf("") }
-    var batchCategory by remember { mutableStateOf("") }
-    var batchPrice by remember { mutableStateOf("") }
-    var batchThumbnailUrl by remember { mutableStateOf("") }
+    // Summary videos list from Supabase videos table (to build Subject/Chapter dynamic hierarchy)
+    var summaryVideos by remember { mutableStateOf<List<SupabaseVideo>>(emptyList()) }
+    var isLoadingSummary by remember { mutableStateOf(false) }
 
-    var folderName by remember { mutableStateOf("All video") }
-    var chapName by remember { mutableStateOf("") }
-    var lessonTitle by remember { mutableStateOf("") }
-    var videoLinkInput by remember { mutableStateOf("") }
-    var thumbnailUrlInput by remember { mutableStateOf("") }
+    fun refreshSummary() {
+        isLoadingSummary = true
+        R2SupabaseManager.fetchVideos(context) { list, error ->
+            isLoadingSummary = false
+            if (list != null) {
+                summaryVideos = list
+            }
+        }
+    }
 
-    var pdfNameInput by remember { mutableStateOf("") }
-    var pdfContentInput by remember { mutableStateOf("") }
-    var pdfSizeInput by remember { mutableStateOf("10.5 MB") }
+    val r2Batches = remember(summaryVideos) {
+        summaryVideos
+            .map { it.classText.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+    }
 
-    var selectedVideoUri by remember { mutableStateOf<Uri?>(null) }
-    var selectedVideoName by remember { mutableStateOf("") }
-    var selectedPdfUri by remember { mutableStateOf<Uri?>(null) }
-    var selectedPdfName by remember { mutableStateOf("") }
-    var selectedLessonThumbnailUri by remember { mutableStateOf<Uri?>(null) }
-    var selectedLessonThumbnailName by remember { mutableStateOf("") }
+    val combinedCourses = remember(courses, r2Batches, summaryVideos) {
+        val list = mutableListOf<CourseEntity>()
+        
+        // Add real courses directly, no fallback
+        list.addAll(courses)
+        
+        // Add virtual courses if they don't exist
+        for (batchName in r2Batches) {
+            val exists = list.any { 
+                java.text.Normalizer.normalize(it.title, java.text.Normalizer.Form.NFC).lowercase()
+                    .replace(Regex("[^\\p{L}\\p{N}]"), "").trim() == 
+                java.text.Normalizer.normalize(batchName, java.text.Normalizer.Form.NFC).lowercase()
+                    .replace(Regex("[^\\p{L}\\p{N}]"), "").trim()
+            }
+            if (!exists) {
+                val sampleVideo = summaryVideos.firstOrNull { 
+                    it.classText.trim().equals(batchName, ignoreCase = true) 
+                }
+                val category = sampleVideo?.subject ?: "R2 Lectures"
+                val virtualId = -(batchName.hashCode().coerceAtLeast(1))
+                list.add(
+                    CourseEntity(
+                        id = virtualId,
+                        title = batchName,
+                        category = category,
+                        subject = sampleVideo?.subject ?: "R2 Lectures",
+                        description = sampleVideo?.description ?: "Dynamic video lectures and PDF study materials for $batchName.",
+                        isFree = true,
+                        price = 0.0,
+                        totalLessons = summaryVideos.count { it.classText.trim().equals(batchName, ignoreCase = true) },
+                        imageUrl = ""
+                    )
+                )
+            }
+        }
+        list
+    }
+
+    LaunchedEffect(Unit) {
+        android.util.Log.i("AdminCourseManager", "[BATCH SYNC] Admin opened Course Manager. Triggering background batch sync...")
+        viewModel.syncFromRemote()
+        refreshSummary()
+    }
+
+    // Tab Selection: 0 = Publish Wizard, 1 = Batches, 2 = Subjects, 3 = Chapters, 4 = Videos
+    var activeTab by remember { mutableIntStateOf(0) }
+    val tabs = listOf(
+        Triple("Publish Wizard", Icons.Default.Publish, 0),
+        Triple("Manage Batches", Icons.Default.Layers, 1),
+        Triple("Manage Subjects", Icons.Default.AutoStories, 2),
+        Triple("Manage Chapters", Icons.Default.Folder, 3),
+        Triple("Manage Videos", Icons.Default.PlayCircle, 4)
+    )
+
+    Scaffold(
+        topBar = {
+            Column(modifier = Modifier.background(MaterialTheme.colorScheme.surface)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text(
+                            text = "Academy CMS Center",
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 20.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Centralized Content Management Panel",
+                            fontSize = 11.sp,
+                            color = Color.Gray
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            refreshSummary()
+                            Toast.makeText(context, "CMS Synced & Refreshed", Toast.LENGTH_SHORT).show()
+                        }
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh CMS")
+                    }
+                }
+                
+                ScrollableTabRow(
+                    selectedTabIndex = activeTab,
+                    edgePadding = 16.dp,
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.primary
+                ) {
+                    tabs.forEach { (title, icon, index) ->
+                        Tab(
+                            selected = activeTab == index,
+                            onClick = { activeTab = index },
+                            text = { Text(title, fontWeight = FontWeight.Bold, fontSize = 12.sp) },
+                            icon = { Icon(icon, contentDescription = title, modifier = Modifier.size(18.dp)) }
+                        )
+                    }
+                }
+            }
+        }
+    ) { paddingValues ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .background(Color(0xFFF8FAFC))
+        ) {
+            when (activeTab) {
+                0 -> PublishWizardScreen(combinedCourses, summaryVideos, viewModel, ::refreshSummary)
+                1 -> ManageBatchesScreen(combinedCourses, viewModel)
+                2 -> ManageSubjectsScreen(combinedCourses, summaryVideos, viewModel, ::refreshSummary)
+                3 -> ManageChaptersScreen(combinedCourses, summaryVideos, viewModel, ::refreshSummary)
+                4 -> ManageVideosScreen(combinedCourses, summaryVideos, viewModel, ::refreshSummary)
+            }
+        }
+    }
+}
+
+// ==========================================
+// 1. PUBLISH WIZARD SCREEN (STEP-BY-STEP)
+// ==========================================
+@Composable
+fun PublishWizardScreen(
+    courses: List<CourseEntity>,
+    summaryVideos: List<SupabaseVideo>,
+    viewModel: AcademyViewModel,
+    onPublishSuccess: () -> Unit
+) {
+    val context = LocalContext.current
+    var currentStep by remember { mutableIntStateOf(1) }
+
+    // State Variables
+    var selectedBatchName by remember { mutableStateOf("") }
+    var isNewBatch by remember { mutableStateOf(false) }
+    
+    // New Batch Fields
+    var newBatchName by remember { mutableStateOf("") }
+    var newBatchDesc by remember { mutableStateOf("") }
+    var newBatchPrice by remember { mutableStateOf("0") }
+    var newBatchValidity by remember { mutableStateOf("365 Days") }
+    var newBatchActive by remember { mutableStateOf(true) }
     var selectedBatchThumbnailUri by remember { mutableStateOf<Uri?>(null) }
     var selectedBatchThumbnailName by remember { mutableStateOf("") }
 
-    var showAddLessonToCourseId by remember { mutableIntStateOf(-1) }
-    var updatingThumbnailCourseId by remember { mutableIntStateOf(-1) }
+    // Subject Fields
+    var selectedSubjectName by remember { mutableStateOf("") }
+    var isNewSubject by remember { mutableStateOf(false) }
+    var newSubjectName by remember { mutableStateOf("") }
+
+    // Chapter Fields
+    var selectedChapterName by remember { mutableStateOf("") }
+    var isNewChapter by remember { mutableStateOf(false) }
+    var newChapterName by remember { mutableStateOf("") }
+
+    // Video & Metadata Fields
+    var videoTitle by remember { mutableStateOf("") }
+    var videoDesc by remember { mutableStateOf("") }
+    var videoDuration by remember { mutableStateOf("30:00") }
+    var videoOrder by remember { mutableStateOf("1") }
+    var videoVisibility by remember { mutableStateOf(true) }
+    
+    // File Picking State
+    var selectedVideoUri by remember { mutableStateOf<Uri?>(null) }
+    var selectedVideoName by remember { mutableStateOf("") }
+    var webVideoUrl by remember { mutableStateOf("") }
+    
+    var selectedVideoThumbnailUri by remember { mutableStateOf<Uri?>(null) }
+    var selectedVideoThumbnailName by remember { mutableStateOf("") }
+    
+    var selectedPdf1Uri by remember { mutableStateOf<Uri?>(null) }
+    var selectedPdf1Name by remember { mutableStateOf("") }
+    
+    var selectedPdf2Uri by remember { mutableStateOf<Uri?>(null) }
+    var selectedPdf2Name by remember { mutableStateOf("") }
+
+    // Progress
+    var isPublishing by remember { mutableStateOf(false) }
+    var publishProgressText by remember { mutableStateOf("") }
+
+    // Pickers
+    val batchThumbnailPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let {
+            try {
+                context.contentResolver.takePersistableUriPermission(it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) { e.printStackTrace() }
+            selectedBatchThumbnailUri = it
+            selectedBatchThumbnailName = getFileNameFromUri(context, it)
+        }
+    }
+
+    val videoThumbnailPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let {
+            try {
+                context.contentResolver.takePersistableUriPermission(it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) { e.printStackTrace() }
+            selectedVideoThumbnailUri = it
+            selectedVideoThumbnailName = getFileNameFromUri(context, it)
+        }
+    }
 
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
             try {
                 context.contentResolver.takePersistableUriPermission(it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+            } catch (e: Exception) { e.printStackTrace() }
             selectedVideoUri = it
             selectedVideoName = getFileNameFromUri(context, it)
         }
     }
 
-    val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+    val pdf1Picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
             try {
                 context.contentResolver.takePersistableUriPermission(it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-            selectedPdfUri = it
-            selectedPdfName = getFileNameFromUri(context, it)
-            pdfSizeInput = getFileSizeFromUri(context, it)
+            } catch (e: Exception) { e.printStackTrace() }
+            selectedPdf1Uri = it
+            selectedPdf1Name = getFileNameFromUri(context, it)
         }
     }
 
-    val lessonThumbnailPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+    val pdf2Picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
             try {
                 context.contentResolver.takePersistableUriPermission(it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-            selectedLessonThumbnailUri = it
-            selectedLessonThumbnailName = getFileNameFromUri(context, it)
-            thumbnailUrlInput = it.toString()
+            } catch (e: Exception) { e.printStackTrace() }
+            selectedPdf2Uri = it
+            selectedPdf2Name = getFileNameFromUri(context, it)
         }
     }
 
-    val batchThumbnailPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let {
-            try {
-                context.contentResolver.takePersistableUriPermission(it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-            if (updatingThumbnailCourseId != -1) {
-                viewModel.updateCourseThumbnail(updatingThumbnailCourseId, it.toString())
-                updatingThumbnailCourseId = -1
-                Toast.makeText(context, "Thumbnail Updated!", Toast.LENGTH_SHORT).show()
-            } else {
-                selectedBatchThumbnailUri = it
-                selectedBatchThumbnailName = getFileNameFromUri(context, it)
-                batchThumbnailUrl = it.toString()
-            }
-        }
+    // Dynamic Lists based on selectors
+    val existingBatches = remember(courses) { courses.map { it.title.trim() }.distinct().filter { it.isNotBlank() } }
+    
+    val existingSubjects = remember(summaryVideos, selectedBatchName) {
+        summaryVideos.filter { it.classText.trim().equals(selectedBatchName.trim(), ignoreCase = true) }
+            .map { it.subject.trim() }.distinct().filter { it.isNotBlank() }
     }
 
-    LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+    val existingChapters = remember(summaryVideos, selectedBatchName, selectedSubjectName) {
+        summaryVideos.filter {
+            it.classText.trim().equals(selectedBatchName.trim(), ignoreCase = true) &&
+            it.subject.trim().equals(selectedSubjectName.trim(), ignoreCase = true)
+        }.map { it.chapter.trim() }.distinct().filter { it.isNotBlank() }
+    }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // Step Indicator Heading
         item {
-            Text("Course & Batch Management", fontWeight = FontWeight.ExtraBold, fontSize = 20.sp, color = Color(0xFF1E293B))
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // SHARING TIP SECTION
             Card(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF7ED)),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                border = BorderStroke(1.dp, Color(0xFFFFEDD5)),
-                shape = RoundedCornerShape(12.dp)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFD97706))
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text("Sharing Tip (जरूरी सूचना)", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF9A3412))
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(MaterialTheme.colorScheme.primary),
+                        contentAlignment = Alignment.Center
+                    ) {
                         Text(
-                            "Use Web Links (YouTube/Drive) to make videos visible to all students. Local files work only on your device.",
-                            fontSize = 11.sp,
-                            color = Color(0xFF9A3412).copy(alpha = 0.8f)
+                            text = "$currentStep",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
                         )
                     }
-                }
-            }
-            
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Add New Batch (Academic / Competitive)", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedTextField(value = batchTitle, onValueChange = { batchTitle = it }, label = { Text("Batch Name (e.g. SSC GD 2026)") }, modifier = Modifier.fillMaxWidth())
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(value = batchCategory, onValueChange = { batchCategory = it }, label = { Text("Category (e.g. Police, Class 10)") }, modifier = Modifier.fillMaxWidth())
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(value = batchPrice, onValueChange = { batchPrice = it }, label = { Text("Price in ₹ (0 for Free)") }, modifier = Modifier.fillMaxWidth())
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Text("Batch Display Thumbnail (Cover Image)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Button(
-                        onClick = { batchThumbnailPicker.launch(arrayOf("image/*")) },
-                        colors = ButtonDefaults.buttonColors(containerColor = if (selectedBatchThumbnailUri != null) Color(0xFF10B981) else Color(0xFF64748B)),
-                        modifier = Modifier.padding(vertical = 4.dp)
-                    ) {
-                        Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(if (selectedBatchThumbnailUri != null) "Thumbnail Selected" else "Choose Batch Cover Image")
-                    }
-                    if (selectedBatchThumbnailName.isNotBlank()) {
-                        Text("Selected: $selectedBatchThumbnailName", fontSize = 11.sp, color = Color.Gray)
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(
-                        onClick = {
-                            if (batchTitle.isBlank()) {
-                                Toast.makeText(context, "Please enter batch name", Toast.LENGTH_SHORT).show()
-                            } else {
-                                viewModel.adminAddNewCourse(
-                                    title = batchTitle,
-                                    category = batchCategory,
-                                    subject = batchCategory,
-                                    desc = "Batch for $batchCategory preparation.",
-                                    isFree = (batchPrice.toDoubleOrNull() ?: 0.0) <= 0.0,
-                                    price = batchPrice.toDoubleOrNull() ?: 0.0,
-                                    imageUrl = batchThumbnailUrl
-                                )
-                                Toast.makeText(context, "New Batch Created: $batchTitle", Toast.LENGTH_SHORT).show()
-                                batchTitle = ""
-                                batchCategory = ""
-                                batchPrice = ""
-                                selectedBatchThumbnailUri = null
-                                selectedBatchThumbnailName = ""
-                                batchThumbnailUrl = ""
-                            }
-                        },
-                        modifier = Modifier.align(Alignment.End)
-                    ) {
-                        Text("Add Batch Online")
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        val stepTitle = when (currentStep) {
+                            1 -> "Select / Create Batch"
+                            2 -> "Select / Create Subject"
+                            3 -> "Select / Create Chapter"
+                            else -> "Upload Lecture & Resources"
+                        }
+                        Text(text = "Publish Wizard - Step $currentStep of 4", fontSize = 11.sp, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
+                        Text(text = stepTitle, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(24.dp))
-            Text("Delete or Add Lessons Syllabus", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            Spacer(modifier = Modifier.height(10.dp))
         }
 
-        items(courses) { course ->
-            Card(
+        // ==================== STEP 1: BATCH ====================
+        if (currentStep == 1) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Select Target Batch/Class", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        
+                        // Select existing batch
+                        if (!isNewBatch) {
+                            if (existingBatches.isEmpty()) {
+                                Text("No batches created yet. Please create a new batch.", color = Color.Gray, fontSize = 12.sp)
+                                isNewBatch = true
+                            } else {
+                                Text("Choose an existing Batch:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                FlowRowHelper(
+                                    items = existingBatches,
+                                    selectedItem = selectedBatchName,
+                                    onSelected = { selectedBatchName = it }
+                                )
+                            }
+                        }
+
+                        if (isNewBatch) {
+                            Text("New Batch Information:", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                            OutlinedTextField(
+                                value = newBatchName,
+                                onValueChange = { newBatchName = it },
+                                label = { Text("Batch Name (e.g. Class 12 Boards)") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = newBatchDesc,
+                                onValueChange = { newBatchDesc = it },
+                                label = { Text("Batch Description") },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 2
+                            )
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = newBatchPrice,
+                                    onValueChange = { newBatchPrice = it },
+                                    label = { Text("Price (₹)") },
+                                    modifier = Modifier.weight(1f)
+                                )
+                                OutlinedTextField(
+                                    value = newBatchValidity,
+                                    onValueChange = { newBatchValidity = it },
+                                    label = { Text("Validity") },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = newBatchActive, onCheckedChange = { newBatchActive = it })
+                                Text("Mark Batch as Active / Published", fontSize = 12.sp)
+                            }
+                            
+                            // Batch cover Image Picker
+                            Button(
+                                onClick = { batchThumbnailPicker.launch(arrayOf("image/*")) },
+                                colors = ButtonDefaults.buttonColors(containerColor = if (selectedBatchThumbnailUri != null) Color(0xFF10B981) else Color(0xFF64748B))
+                            ) {
+                                Icon(Icons.Default.Image, null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(if (selectedBatchThumbnailUri != null) "Cover Selected" else "Select Cover Thumbnail")
+                            }
+                            if (selectedBatchThumbnailName.isNotEmpty()) {
+                                Text("File: $selectedBatchThumbnailName", fontSize = 11.sp, color = Color.Gray)
+                            }
+                        }
+
+                        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.5f))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(
+                                onClick = { isNewBatch = !isNewBatch }
+                            ) {
+                                Text(if (isNewBatch) "Use Existing Batch" else "+ Create New Batch")
+                            }
+                            
+                            Button(
+                                onClick = {
+                                    if (isNewBatch) {
+                                        if (newBatchName.isBlank()) {
+                                            Toast.makeText(context, "Please enter batch name!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            // Check duplicate batch names
+                                            val isDuplicate = existingBatches.any { it.equals(newBatchName.trim(), ignoreCase = true) }
+                                            if (isDuplicate) {
+                                                Toast.makeText(context, "A batch with this name already exists. Reusing it.", Toast.LENGTH_SHORT).show()
+                                                selectedBatchName = newBatchName.trim()
+                                                isNewBatch = false
+                                                currentStep = 2
+                                            } else {
+                                                // Register batch in local db
+                                                viewModel.adminAddNewCourse(
+                                                    title = newBatchName.trim(),
+                                                    category = "Class",
+                                                    subject = "Mixed",
+                                                    desc = buildBatchDescription(newBatchValidity, newBatchActive, newBatchDesc),
+                                                    isFree = (newBatchPrice.toDoubleOrNull() ?: 0.0) <= 0.0,
+                                                    price = newBatchPrice.toDoubleOrNull() ?: 0.0,
+                                                    imageUrl = selectedBatchThumbnailUri?.toString() ?: ""
+                                                )
+                                                selectedBatchName = newBatchName.trim()
+                                                currentStep = 2
+                                            }
+                                        }
+                                    } else {
+                                        if (selectedBatchName.isBlank()) {
+                                            Toast.makeText(context, "Please select a Batch first!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            currentStep = 2
+                                        }
+                                    }
+                                }
+                            ) {
+                                Text("Next Step")
+                                Icon(Icons.Default.ArrowForward, null, modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ==================== STEP 2: SUBJECT ====================
+        if (currentStep == 2) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Selected Batch: ", fontSize = 12.sp, color = Color.Gray)
+                            Text(selectedBatchName, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                        }
+                        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
+                        Text("Select Target Subject", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+
+                        if (!isNewSubject) {
+                            if (existingSubjects.isEmpty()) {
+                                Text("No subjects added to this batch yet. Create a new one below.", color = Color.Gray, fontSize = 12.sp)
+                                isNewSubject = true
+                            } else {
+                                Text("Choose an existing Subject:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                FlowRowHelper(
+                                    items = existingSubjects,
+                                    selectedItem = selectedSubjectName,
+                                    onSelected = { selectedSubjectName = it }
+                                )
+                            }
+                        }
+
+                        if (isNewSubject) {
+                            Text("New Subject Information:", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                            OutlinedTextField(
+                                value = newSubjectName,
+                                onValueChange = { newSubjectName = it },
+                                label = { Text("Subject Name (e.g. Physics, Mathematics)") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.5f))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row {
+                                TextButton(onClick = { currentStep = 1 }) {
+                                    Icon(Icons.Default.ArrowBack, null, modifier = Modifier.size(16.dp))
+                                    Text("Back")
+                                }
+                                Spacer(modifier = Modifier.width(4.dp))
+                                TextButton(onClick = { isNewSubject = !isNewSubject }) {
+                                    Text(if (isNewSubject) "Use Existing" else "+ Create New Subject")
+                                }
+                            }
+                            
+                            Button(
+                                onClick = {
+                                    if (isNewSubject) {
+                                        if (newSubjectName.isBlank()) {
+                                            Toast.makeText(context, "Please enter subject name!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            val isDuplicate = existingSubjects.any { it.equals(newSubjectName.trim(), ignoreCase = true) }
+                                            if (isDuplicate) {
+                                                Toast.makeText(context, "Subject already exists. Reusing it.", Toast.LENGTH_SHORT).show()
+                                                selectedSubjectName = newSubjectName.trim()
+                                                isNewSubject = false
+                                            } else {
+                                                selectedSubjectName = newSubjectName.trim()
+                                            }
+                                            currentStep = 3
+                                        }
+                                    } else {
+                                        if (selectedSubjectName.isBlank()) {
+                                            Toast.makeText(context, "Please select a Subject!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            currentStep = 3
+                                        }
+                                    }
+                                }
+                            ) {
+                                Text("Next Step")
+                                Icon(Icons.Default.ArrowForward, null, modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ==================== STEP 3: CHAPTER ====================
+        if (currentStep == 3) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Selected Batch & Subject: ", fontSize = 11.sp, color = Color.Gray)
+                            Text("$selectedBatchName › $selectedSubjectName", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                        }
+                        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
+                        Text("Select Target Chapter", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+
+                        if (!isNewChapter) {
+                            if (existingChapters.isEmpty()) {
+                                Text("No chapters added to this subject yet. Create a new chapter below.", color = Color.Gray, fontSize = 12.sp)
+                                isNewChapter = true
+                            } else {
+                                Text("Choose an existing Chapter:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                FlowRowHelper(
+                                    items = existingChapters,
+                                    selectedItem = selectedChapterName,
+                                    onSelected = { selectedChapterName = it }
+                                )
+                            }
+                        }
+
+                        if (isNewChapter) {
+                            Text("New Chapter Information:", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                            OutlinedTextField(
+                                value = newChapterName,
+                                onValueChange = { newChapterName = it },
+                                label = { Text("Chapter Name (e.g. Chapter 1: Electrostatics)") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.5f))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row {
+                                TextButton(onClick = { currentStep = 2 }) {
+                                    Icon(Icons.Default.ArrowBack, null, modifier = Modifier.size(16.dp))
+                                    Text("Back")
+                                }
+                                Spacer(modifier = Modifier.width(4.dp))
+                                TextButton(onClick = { isNewChapter = !isNewChapter }) {
+                                    Text(if (isNewChapter) "Use Existing" else "+ Create New Chapter")
+                                }
+                            }
+                            
+                            Button(
+                                onClick = {
+                                    if (isNewChapter) {
+                                        if (newChapterName.isBlank()) {
+                                            Toast.makeText(context, "Please enter chapter name!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            val isDuplicate = existingChapters.any { it.equals(newChapterName.trim(), ignoreCase = true) }
+                                            if (isDuplicate) {
+                                                Toast.makeText(context, "Chapter already exists. Reusing it.", Toast.LENGTH_SHORT).show()
+                                                selectedChapterName = newChapterName.trim()
+                                                isNewChapter = false
+                                            } else {
+                                                selectedChapterName = newChapterName.trim()
+                                            }
+                                            currentStep = 4
+                                        }
+                                    } else {
+                                        if (selectedChapterName.isBlank()) {
+                                            Toast.makeText(context, "Please select a Chapter!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            currentStep = 4
+                                        }
+                                    }
+                                }
+                            ) {
+                                Text("Next Step")
+                                Icon(Icons.Default.ArrowForward, null, modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ==================== STEP 4: PUBLISH FORM ====================
+        if (currentStep == 4) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Selected Target: ", fontSize = 11.sp, color = Color.Gray)
+                            Text("$selectedBatchName › $selectedSubjectName › $selectedChapterName", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
+                        Text("Lecture Information & Files", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+
+                        OutlinedTextField(
+                            value = videoTitle,
+                            onValueChange = { videoTitle = it },
+                            label = { Text("Video / Lecture Title") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        OutlinedTextField(
+                            value = videoDesc,
+                            onValueChange = { videoDesc = it },
+                            label = { Text("Video Description / Syllabus Summary") },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 2
+                        )
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = videoDuration,
+                                onValueChange = { videoDuration = it },
+                                label = { Text("Duration") },
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedTextField(
+                                value = videoOrder,
+                                onValueChange = { videoOrder = it },
+                                label = { Text("Order No.") },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = videoVisibility, onCheckedChange = { videoVisibility = it })
+                            Text("Publish and Make Visible to Students", fontSize = 12.sp)
+                        }
+
+                        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
+                        
+                        // 1. Pick Lecture Video
+                        Text("1. Select Lecture Video:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        OutlinedTextField(
+                            value = webVideoUrl,
+                            onValueChange = { webVideoUrl = it },
+                            label = { Text("Web URL / YouTube / Drive Video Link (Recommended)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text("https://...") },
+                            leadingIcon = { Icon(Icons.Default.Link, null) }
+                        )
+                        Text("OR select video file from your device:", fontSize = 11.sp, color = Color.Gray)
+                        Button(
+                            onClick = { videoPicker.launch(arrayOf("video/*")) },
+                            colors = ButtonDefaults.buttonColors(containerColor = if (selectedVideoUri != null) Color(0xFF10B981) else Color(0xFF64748B))
+                        ) {
+                            Icon(Icons.Default.Upload, null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (selectedVideoUri != null) "Video Selected" else "Browse MP4 Video File")
+                        }
+                        if (selectedVideoName.isNotEmpty()) {
+                            Text("File: $selectedVideoName", fontSize = 11.sp, color = Color.DarkGray)
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        
+                        // 2. Pick Video Thumbnail
+                        Text("2. Select Video Thumbnail Image:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Button(
+                            onClick = { videoThumbnailPicker.launch(arrayOf("image/*")) },
+                            colors = ButtonDefaults.buttonColors(containerColor = if (selectedVideoThumbnailUri != null) Color(0xFF10B981) else Color(0xFF64748B))
+                        ) {
+                            Icon(Icons.Default.Image, null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (selectedVideoThumbnailUri != null) "Thumbnail Selected" else "Browse Thumbnail Image")
+                        }
+                        if (selectedVideoThumbnailName.isNotEmpty()) {
+                            Text("File: $selectedVideoThumbnailName", fontSize = 11.sp, color = Color.DarkGray)
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        // 3. Pick PDF 1 (Handwritten Notes)
+                        Text("3. Attach PDF 1 (Handwritten Notes):", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Button(
+                            onClick = { pdf1Picker.launch(arrayOf("application/pdf")) },
+                            colors = ButtonDefaults.buttonColors(containerColor = if (selectedPdf1Uri != null) Color(0xFF10B981) else Color(0xFF64748B))
+                        ) {
+                            Icon(Icons.Default.Description, null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (selectedPdf1Uri != null) "PDF 1 Attached" else "Browse PDF 1 File")
+                        }
+                        if (selectedPdf1Name.isNotEmpty()) {
+                            Text("File: $selectedPdf1Name", fontSize = 11.sp, color = Color.DarkGray)
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        // 4. Pick PDF 2 (Board/Class Notes)
+                        Text("4. Attach PDF 2 (Board/Class Notes):", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Button(
+                            onClick = { pdf2Picker.launch(arrayOf("application/pdf")) },
+                            colors = ButtonDefaults.buttonColors(containerColor = if (selectedPdf2Uri != null) Color(0xFF10B981) else Color(0xFF64748B))
+                        ) {
+                            Icon(Icons.Default.BorderColor, null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (selectedPdf2Uri != null) "PDF 2 Attached" else "Browse PDF 2 File")
+                        }
+                        if (selectedPdf2Name.isNotEmpty()) {
+                            Text("File: $selectedPdf2Name", fontSize = 11.sp, color = Color.DarkGray)
+                        }
+
+                        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.5f))
+
+                        if (isPublishing) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                CircularProgressIndicator()
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = publishProgressText,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                TextButton(
+                                    enabled = !isPublishing,
+                                    onClick = { currentStep = 3 }
+                                ) {
+                                    Icon(Icons.Default.ArrowBack, null, modifier = Modifier.size(16.dp))
+                                    Text("Back")
+                                }
+                                
+                                Button(
+                                    enabled = !isPublishing,
+                                    onClick = {
+                                        if (videoTitle.isBlank()) {
+                                            Toast.makeText(context, "Please enter lecture title!", Toast.LENGTH_SHORT).show()
+                                        } else if (selectedVideoUri == null && webVideoUrl.isBlank()) {
+                                            Toast.makeText(context, "Please enter web video URL or pick a video file!", Toast.LENGTH_SHORT).show()
+                                        } else if (!com.example.ui.screens.isYouTubeUrl(webVideoUrl) && selectedVideoThumbnailUri == null) {
+                                            Toast.makeText(context, "Please select a Thumbnail image file!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            isPublishing = true
+                                            publishProgressText = "Publishing content, please wait..."
+                                            val activeProvider = com.example.service.MediaStorageServiceFactory.getService(context).getStorageType()
+                                            if (activeProvider == "BACKBLAZE_B2") {
+                                                com.example.api.BackblazeB2Manager.publishContentUnified(
+                                                    context = context,
+                                                    videoUri = selectedVideoUri,
+                                                    videoUrlInput = webVideoUrl,
+                                                    thumbnailUri = selectedVideoThumbnailUri,
+                                                    pdf1Uri = selectedPdf1Uri,
+                                                    pdf2Uri = selectedPdf2Uri,
+                                                    title = videoTitle.trim(),
+                                                    classText = selectedBatchName,
+                                                    subject = selectedSubjectName,
+                                                    chapter = selectedChapterName,
+                                                    description = videoDesc.trim(),
+                                                    duration = videoDuration.trim(),
+                                                    orderNumber = videoOrder.toIntOrNull() ?: 1,
+                                                    visibility = videoVisibility,
+                                                    onProgress = { progressMsg ->
+                                                        publishProgressText = progressMsg
+                                                    },
+                                                    onSuccess = {
+                                                        isPublishing = false
+                                                        Toast.makeText(context, "Published Successfully! 🚀", Toast.LENGTH_LONG).show()
+                                                        onPublishSuccess()
+                                                        // Reset step 4 values
+                                                        videoTitle = ""
+                                                        videoDesc = ""
+                                                        videoDuration = "30:00"
+                                                        videoOrder = "1"
+                                                        videoVisibility = true
+                                                        selectedVideoUri = null
+                                                        selectedVideoName = ""
+                                                        webVideoUrl = ""
+                                                        selectedVideoThumbnailUri = null
+                                                        selectedVideoThumbnailName = ""
+                                                        selectedPdf1Uri = null
+                                                        selectedPdf1Name = ""
+                                                        selectedPdf2Uri = null
+                                                        selectedPdf2Name = ""
+                                                        currentStep = 1
+                                                    },
+                                                    onError = { errorMsg ->
+                                                        isPublishing = false
+                                                        Toast.makeText(context, "Publish Failed: $errorMsg", Toast.LENGTH_LONG).show()
+                                                    }
+                                                )
+                                            } else {
+                                                R2SupabaseManager.publishContentUnified(
+                                                    context = context,
+                                                    videoUri = selectedVideoUri,
+                                                    videoUrlInput = webVideoUrl,
+                                                    thumbnailUri = selectedVideoThumbnailUri,
+                                                    pdf1Uri = selectedPdf1Uri,
+                                                    pdf2Uri = selectedPdf2Uri,
+                                                    title = videoTitle.trim(),
+                                                    classText = selectedBatchName,
+                                                    subject = selectedSubjectName,
+                                                    chapter = selectedChapterName,
+                                                    description = videoDesc.trim(),
+                                                    duration = videoDuration.trim(),
+                                                    orderNumber = videoOrder.toIntOrNull() ?: 1,
+                                                    visibility = videoVisibility,
+                                                    onProgress = { progressMsg ->
+                                                        publishProgressText = progressMsg
+                                                    },
+                                                    onSuccess = {
+                                                        isPublishing = false
+                                                        Toast.makeText(context, "Published Successfully! 🚀", Toast.LENGTH_LONG).show()
+                                                        onPublishSuccess()
+                                                        // Reset step 4 values
+                                                        videoTitle = ""
+                                                        videoDesc = ""
+                                                        videoDuration = "30:00"
+                                                        videoOrder = "1"
+                                                        videoVisibility = true
+                                                        selectedVideoUri = null
+                                                        selectedVideoName = ""
+                                                        webVideoUrl = ""
+                                                        selectedVideoThumbnailUri = null
+                                                        selectedVideoThumbnailName = ""
+                                                        selectedPdf1Uri = null
+                                                        selectedPdf1Name = ""
+                                                        selectedPdf2Uri = null
+                                                        selectedPdf2Name = ""
+                                                        currentStep = 1
+                                                    },
+                                                    onError = { errorMsg ->
+                                                        isPublishing = false
+                                                        Toast.makeText(context, "Publish Failed: $errorMsg", Toast.LENGTH_LONG).show()
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
+                                ) {
+                                    Icon(Icons.Default.Publish, null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Publish Content")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Helper wrapper flowrow for Compose
+@Composable
+fun FlowRowHelper(
+    items: List<String>,
+    selectedItem: String,
+    onSelected: (String) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        items.forEach { item ->
+            val isSelected = selectedItem.trim().equals(item.trim(), ignoreCase = true)
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 6.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.LightGray.copy(alpha = 0.4f))
+                    .clickable { onSelected(item) }
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Text(course.title, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    Text("Category: ${course.category} • Total lessons: ${course.totalLessons}", fontSize = 12.sp, color = Color.Gray)
-                    Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = item,
+                    color = if (isSelected) Color.White else Color.DarkGray,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+// ==========================================
+// 2. MANAGE BATCHES SCREEN
+// ==========================================
+@Composable
+fun ManageBatchesScreen(
+    courses: List<CourseEntity>,
+    viewModel: AcademyViewModel
+) {
+    val context = LocalContext.current
+    var editingCourse by remember { mutableStateOf<CourseEntity?>(null) }
+    
+    // Edit Form states
+    var editName by remember { mutableStateOf("") }
+    var editDesc by remember { mutableStateOf("") }
+    var editPrice by remember { mutableStateOf("") }
+    var editValidity by remember { mutableStateOf("") }
+    var editActive by remember { mutableStateOf(true) }
+    var editImageUrl by remember { mutableStateOf("") }
+
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let {
+            try {
+                context.contentResolver.takePersistableUriPermission(it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) { e.printStackTrace() }
+            android.util.Log.i("AdminCourseManager", "[COVER IMAGE SELECT] Selected cover image URI: $it")
+            editImageUrl = it.toString()
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item {
+            Text("All Batches (${courses.size})", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF1E293B))
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
+        items(courses) { batch ->
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                border = BorderStroke(1.dp, Color.LightGray.copy(alpha = 0.4f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (batch.imageUrl.isNotBlank()) {
+                            coil.compose.AsyncImage(
+                                model = batch.imageUrl,
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .size(60.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0xFFF1F5F9)),
+                                contentScale = ContentScale.Crop,
+                                onState = { state ->
+                                    if (state is coil.compose.AsyncImagePainter.State.Error) {
+                                        android.util.Log.e("AdminCourseManager", "[IMAGE ERROR] Failed to load: ${batch.imageUrl}", state.result.throwable)
+                                    }
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(60.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0xFFF1F5F9)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.School, null, tint = Color.LightGray, modifier = Modifier.size(24.dp))
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                        }
+
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(batch.title, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF0F172A))
+                                Text("Validity: ${batch.getValidity()} • Price: ₹${batch.price}", fontSize = 12.sp, color = Color.Gray)
+                            }
+                            
+                            // Status badge
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (batch.isActive()) Color(0xFFDCFCE7) else Color(0xFFFEE2E2))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = if (batch.isActive()) "Active" else "Inactive",
+                                    color = if (batch.isActive()) Color(0xFF15803D) else Color(0xFFB91C1C),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(batch.getRealDescription(), fontSize = 12.sp, color = Color.Gray, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
+                    Spacer(modifier = Modifier.height(4.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -232,411 +1130,678 @@ fun AdminCourseManager(viewModel: AcademyViewModel) {
                     ) {
                         TextButton(
                             onClick = {
-                                if (showAddLessonToCourseId == course.id) {
-                                    showAddLessonToCourseId = -1
-                                } else {
-                                    showAddLessonToCourseId = course.id
-                                }
+                                editingCourse = batch
+                                editName = batch.title
+                                editDesc = batch.getRealDescription()
+                                editPrice = batch.price.toString()
+                                editValidity = batch.getValidity()
+                                editActive = batch.isActive()
+                                editImageUrl = batch.imageUrl
+                                android.util.Log.i("AdminCourseManager", "[EDIT BATCH CLICK] Editing batch ID: ${batch.id}, initial imageUrl: ${batch.imageUrl}")
                             }
                         ) {
-                            Text(if (showAddLessonToCourseId == course.id) "Collapse" else "+ Add Lesson", color = BrandBlueSecondary)
+                            Icon(Icons.Default.Edit, null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Edit")
                         }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        TextButton(onClick = { viewModel.adminDeleteCourse(course.id) }) {
-                            Text("Delete Course", color = Color.Red)
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        TextButton(onClick = {
-                            updatingThumbnailCourseId = course.id
-                            batchThumbnailPicker.launch(arrayOf("image/*"))
-                        }) {
-                            Text("Change Thumbnail", color = Color(0xFF64748B))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextButton(
+                            onClick = {
+                                viewModel.adminDeleteCourse(batch.id)
+                                Toast.makeText(context, "Batch deleted!", Toast.LENGTH_SHORT).show()
+                            }
+                        ) {
+                            Icon(Icons.Default.Delete, null, modifier = Modifier.size(14.dp), tint = Color.Red)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Delete", color = Color.Red)
                         }
                     }
+                }
+            }
+        }
+    }
 
-                    if (showAddLessonToCourseId == course.id) {
-                        LaunchedEffect(course.id) {
-                            viewModel.selectCourse(course)
+    // Edit Dialog
+    if (editingCourse != null) {
+        AlertDialog(
+            onDismissRequest = { editingCourse = null },
+            title = { Text("Edit Batch Details", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = editName, onValueChange = { editName = it }, label = { Text("Batch Name") })
+                    OutlinedTextField(value = editDesc, onValueChange = { editDesc = it }, label = { Text("Batch Description") }, minLines = 2)
+                    OutlinedTextField(value = editPrice, onValueChange = { editPrice = it }, label = { Text("Price (₹)") })
+                    OutlinedTextField(value = editValidity, onValueChange = { editValidity = it }, label = { Text("Validity") })
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = editActive, onCheckedChange = { editActive = it })
+                        Text("Active status", fontSize = 13.sp)
+                    }
+                    
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Cover Image", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFF1E293B))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        if (editImageUrl.isNotEmpty()) {
+                            coil.compose.AsyncImage(
+                                model = editImageUrl,
+                                contentDescription = "Cover Image Preview",
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .border(1.dp, Color.LightGray, RoundedCornerShape(8.dp)),
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                onState = { state ->
+                                    when (state) {
+                                        is coil.compose.AsyncImagePainter.State.Success -> {
+                                            android.util.Log.i("AdminCourseManager", "[IMAGE LOAD SUCCESS] URL: $editImageUrl")
+                                        }
+                                        is coil.compose.AsyncImagePainter.State.Error -> {
+                                            android.util.Log.e("AdminCourseManager", "[IMAGE LOAD FAILED] URL: $editImageUrl", state.result.throwable)
+                                        }
+                                        else -> {}
+                                    }
+                                }
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color.LightGray.copy(alpha = 0.3f))
+                                    .border(1.dp, Color.LightGray, RoundedCornerShape(8.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.Image, contentDescription = null, tint = Color.Gray)
+                            }
                         }
 
-                        val existingChapters = remember(currentLessons) {
-                            currentLessons.map { it.chapterName.trim() }.distinct().filter { it.isNotBlank() }
-                        }
-                        val existingFolders = remember(currentLessons, chapName) {
-                            currentLessons.filter { it.chapterName.trim().equals(chapName.trim(), ignoreCase = true) }
-                                .map { it.folder.trim() }.distinct().filter { it.isNotBlank() }
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Color.LightGray.copy(alpha = 0.2f))
-                                .padding(12.dp)
+                        Button(
+                            onClick = {
+                                android.util.Log.i("AdminCourseManager", "[COVER IMAGE SELECT] Launching image picker...")
+                                imagePickerLauncher.launch(arrayOf("image/*"))
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
                         ) {
-                            Column {
-                                OutlinedTextField(
-                                    value = chapName,
-                                    onValueChange = { chapName = it },
-                                    label = { Text("Topic/Chapter (e.g. Science)") },
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                
-                                if (existingChapters.isNotEmpty()) {
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Text("Choose Existing Chapter/Topic (or type new):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 4.dp)
-                                            .horizontalScroll(rememberScrollState()),
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        existingChapters.forEach { chap ->
-                                            val isSelected = chapName.trim().equals(chap, ignoreCase = true)
-                                            Box(
-                                                modifier = Modifier
-                                                    .clip(RoundedCornerShape(16.dp))
-                                                    .background(if (isSelected) Color(0xFF6366F1) else Color.LightGray.copy(alpha = 0.5f))
-                                                    .clickable { chapName = chap }
-                                                    .padding(horizontal = 12.dp, vertical = 6.dp)
-                                            ) {
-                                                Text(
-                                                    text = chap,
-                                                    color = if (isSelected) Color.White else Color.DarkGray,
-                                                    fontSize = 11.sp,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
+                            Text("Change Cover Image", fontSize = 12.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val p = editPrice.toDoubleOrNull() ?: 0.0
+                        android.util.Log.i("AdminCourseManager", "[COVER IMAGE SAVE] Save changes clicked for ID: ${editingCourse!!.id}. Final imageUrl: $editImageUrl")
+                        viewModel.adminUpdateCourse(
+                            id = editingCourse!!.id,
+                            title = editName.trim(),
+                            description = buildBatchDescription(editValidity.trim(), editActive, editDesc.trim()),
+                            price = p,
+                            isFree = p <= 0.0,
+                            imageUrl = editImageUrl
+                        )
+                        Toast.makeText(context, "Batch Updated Successfully!", Toast.LENGTH_SHORT).show()
+                        editingCourse = null
+                    }
+                ) { Text("Save Changes") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingCourse = null }) { Text("Cancel") }
+            }
+        )
+    }
+}
 
-                                Spacer(modifier = Modifier.height(8.dp))
-                                OutlinedTextField(
-                                    value = folderName,
-                                    onValueChange = { folderName = it },
-                                    label = { Text("Folder (e.g. Video, Notes)") },
-                                    modifier = Modifier.fillMaxWidth()
-                                )
+// ==========================================
+// 3. MANAGE SUBJECTS SCREEN
+// ==========================================
+@Composable
+fun ManageSubjectsScreen(
+    courses: List<CourseEntity>,
+    summaryVideos: List<SupabaseVideo>,
+    viewModel: AcademyViewModel,
+    onRenameDeleteSuccess: () -> Unit
+) {
+    val context = LocalContext.current
+    var selectedBatchName by remember { mutableStateOf("") }
+    
+    val existingBatches = remember(courses) { courses.map { it.title.trim() }.distinct().filter { it.isNotBlank() } }
+    
+    val existingSubjects = remember(summaryVideos, selectedBatchName) {
+        summaryVideos.filter { it.classText.trim().equals(selectedBatchName.trim(), ignoreCase = true) }
+            .map { it.subject.trim() }.distinct().filter { it.isNotBlank() }
+    }
 
-                                if (existingFolders.isNotEmpty()) {
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Text("Choose Existing Folder (or type new):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 4.dp)
-                                            .horizontalScroll(rememberScrollState()),
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        existingFolders.forEach { fld ->
-                                            val isSelected = folderName.trim().equals(fld, ignoreCase = true)
-                                            Box(
-                                                modifier = Modifier
-                                                    .clip(RoundedCornerShape(16.dp))
-                                                    .background(if (isSelected) Color(0xFF6366F1) else Color.LightGray.copy(alpha = 0.5f))
-                                                    .clickable { folderName = fld }
-                                                    .padding(horizontal = 12.dp, vertical = 6.dp)
-                                            ) {
-                                                Text(
-                                                    text = fld,
-                                                    color = if (isSelected) Color.White else Color.DarkGray,
-                                                    fontSize = 11.sp,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
+    var renamingSubjectOld by remember { mutableStateOf("") }
+    var renamingSubjectNew by remember { mutableStateOf("") }
+    var isOperating by remember { mutableStateOf(false) }
 
-                                Spacer(modifier = Modifier.height(8.dp))
-                                OutlinedTextField(value = lessonTitle, onValueChange = { lessonTitle = it }, label = { Text("Lesson Name (लेसन का नाम)") }, modifier = Modifier.fillMaxWidth())
-                                Spacer(modifier = Modifier.height(8.dp))
-                                
-                                // Thumbnail Picker
-                                Button(
-                                    onClick = { lessonThumbnailPicker.launch(arrayOf("image/*")) },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (selectedLessonThumbnailUri != null) Color(0xFF10B981) else BrandBlueSecondary
-                                    ),
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Icon(
-                                        imageVector = if (selectedLessonThumbnailUri != null) Icons.Default.CheckCircle else Icons.Default.Image,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(if (selectedLessonThumbnailUri != null) "Lesson Thumbnail Ready" else "Browse Lesson Preview Thumbnail")
-                                }
-                                if (selectedLessonThumbnailName.isNotBlank()) {
-                                    Text("Image: $selectedLessonThumbnailName", fontSize = 11.sp, color = Color.DarkGray, modifier = Modifier.padding(start = 4.dp))
-                                }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Text("Subject Management", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF1E293B))
+            Text("Select a batch to manage its subjects.", fontSize = 12.sp, color = Color.Gray)
+            Spacer(modifier = Modifier.height(4.dp))
+        }
 
-                                Spacer(modifier = Modifier.height(12.dp))
-                                
-                                // VIDEO UPLOADER
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color(0xFF6366F1))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Video Source (Web Link is Recommended)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                }
-                                
-                                Text(
-                                    "Note: If you use a web link (YouTube/Drive), all students can see the video. Local files only work on your device.",
-                                    fontSize = 11.sp,
-                                    color = Color(0xFF6366F1),
-                                    modifier = Modifier.padding(vertical = 4.dp)
-                                )
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Choose Batch:", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    if (existingBatches.isEmpty()) {
+                        Text("No batches found.", fontSize = 12.sp, color = Color.Gray)
+                    } else {
+                        FlowRowHelper(items = existingBatches, selectedItem = selectedBatchName, onSelected = { selectedBatchName = it })
+                    }
+                }
+            }
+        }
 
-                                OutlinedTextField(
-                                    value = videoLinkInput,
-                                    onValueChange = { videoLinkInput = it },
-                                    label = { Text("Web Video URL (YouTube, Drive, or direct MP4)") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    placeholder = { Text("https://...") },
-                                    leadingIcon = { Icon(Icons.Default.Link, contentDescription = null) }
-                                )
+        if (selectedBatchName.isNotEmpty()) {
+            item {
+                Text("Subjects in $selectedBatchName (${existingSubjects.size})", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            }
 
-                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
-                                    HorizontalDivider(modifier = Modifier.weight(1f))
-                                    Text(" OR ", fontSize = 10.sp, color = Color.Gray, modifier = Modifier.padding(horizontal = 8.dp))
-                                    HorizontalDivider(modifier = Modifier.weight(1f))
-                                }
-
-                                Button(
-                                    onClick = { videoPicker.launch(arrayOf("video/*")) },
-                                    colors = ButtonDefaults.buttonColors(containerColor = if (selectedVideoUri != null) Color(0xFF10B981) else Color(0xFF94A3B8)),
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(if (selectedVideoUri != null) "Local File Selected" else "Pick Video from Phone Storage")
-                                }
-                                if (selectedVideoName.isNotBlank()) {
-                                    Text("File: $selectedVideoName (Local only)", fontSize = 10.sp, color = Color.Red.copy(alpha = 0.7f))
-                                }
-
-                                Spacer(modifier = Modifier.height(16.dp))
-
-                                // PDF UPLOADER
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Description, contentDescription = null, tint = Color(0xFFD97706))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Study Materials (PDF / Document)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                }
-                                Button(
-                                    onClick = { pdfPicker.launch(arrayOf("application/pdf")) },
-                                    colors = ButtonDefaults.buttonColors(containerColor = if (selectedPdfUri != null) Color(0xFF10B981) else Color(0xFFD97706)),
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                                ) {
-                                    Text(if (selectedPdfUri != null) "PDF Document Attached 📄" else "Pick Study PDF from Phone")
-                                }
-                                
-                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                                    OutlinedTextField(value = pdfNameInput, onValueChange = { pdfNameInput = it }, label = { Text("Display PDF Name") }, modifier = Modifier.weight(1f))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    OutlinedTextField(value = pdfSizeInput, onValueChange = { pdfSizeInput = it }, label = { Text("Size") }, modifier = Modifier.width(100.dp))
-                                }
-                                
-                                if (selectedPdfName.isNotBlank()) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            imageVector = Icons.Default.PictureAsPdf,
-                                            contentDescription = null,
-                                            tint = Color(0xFFD97706),
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = selectedPdfName,
-                                            fontSize = 12.sp,
-                                            color = Color(0xFFB45309),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                    IconButton(
-                                        onClick = {
-                                            selectedPdfUri = null
-                                            selectedPdfName = ""
-                                            pdfNameInput = ""
-                                            pdfSizeInput = "10.5 MB"
-                                        },
-                                        modifier = Modifier.size(24.dp).align(Alignment.End)
-                                    ) {
-                                        Icon(Icons.Default.Cancel, contentDescription = null, tint = Color.Red)
-                                    }
-                                }
-
-                                OutlinedTextField(value = pdfContentInput, onValueChange = { pdfContentInput = it }, label = { Text("Brief Content / Notes Summary") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
-
-                                Spacer(modifier = Modifier.height(16.dp))
-                                Button(
+            if (existingSubjects.isEmpty()) {
+                item {
+                    Text("No subjects created under this batch yet.", fontSize = 12.sp, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(32.dp))
+                }
+            } else {
+                items(existingSubjects) { subject ->
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        border = BorderStroke(1.dp, Color.LightGray.copy(alpha = 0.3f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp).fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(subject, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color(0xFF334155))
+                            
+                            Row {
+                                IconButton(
                                     onClick = {
-                                        val finalVideoLink = if (selectedVideoUri != null) selectedVideoUri.toString() else videoLinkInput.trim()
-                                        var isValid = true
-                                        var validationError = ""
-                                        if (selectedVideoUri == null && videoLinkInput.isNotBlank()) {
-                                            val url = videoLinkInput.trim()
-                                            if (url.startsWith("content://") || url.startsWith("file://")) {
-                                                isValid = false
-                                                validationError = "Local content URI not allowed in Web URL. Please use the 'Pick Video from Phone' button below."
-                                            } else if (!url.startsWith("https://") && !url.startsWith("http://")) {
-                                                isValid = false
-                                                validationError = "Web Video URL must start with https://"
+                                        renamingSubjectOld = subject
+                                        renamingSubjectNew = subject
+                                    }
+                                ) { Icon(Icons.Default.Edit, "Rename", tint = MaterialTheme.colorScheme.primary) }
+                                
+                                IconButton(
+                                    onClick = {
+                                        isOperating = true
+                                        R2SupabaseManager.deleteSubject(context, selectedBatchName, subject) { success, err ->
+                                            isOperating = false
+                                            if (success) {
+                                                Toast.makeText(context, "Subject deleted successfully!", Toast.LENGTH_SHORT).show()
+                                                onRenameDeleteSuccess()
                                             } else {
-                                                val detected = detectVideoSourceType(url)
-                                                when (detected) {
-                                                    "YOUTUBE" -> {
-                                                        if (extractYouTubeVideoId(url) == null) {
-                                                            isValid = false
-                                                            validationError = "Invalid YouTube URL"
-                                                        }
-                                                    }
-                                                    "GOOGLE_DRIVE" -> {
-                                                        val converted = convertDriveUrl(url)
-                                                        if (converted == url) {
-                                                            isValid = false
-                                                            validationError = "Drive link not public"
-                                                        }
-                                                    }
-                                                    "MP4" -> {
-                                                        if (!url.contains(".mp4") && !url.contains("mov_bbb") && !url.contains("movie.mp4") && !url.contains("stream") && !url.contains("w3schools")) {
-                                                            isValid = false
-                                                            validationError = "Invalid MP4"
-                                                        }
-                                                    }
-                                                     else -> {
-                                                         isValid = false
-                                                         validationError = "Unsupported URL"
-                                                     }
-                                                }
+                                                Toast.makeText(context, "Deletion failed: $err", Toast.LENGTH_SHORT).show()
                                             }
                                         }
-                                        if (!isValid) {
-                                            Toast.makeText(context, validationError, Toast.LENGTH_LONG).show()
-                                        } else if (chapName.isBlank() || lessonTitle.isBlank()) {
-                                            Toast.makeText(context, "Please enter both Chapter Title and Lesson Name!", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            viewModel.adminAddLessonToCourse(
-                                                courseId = course.id,
-                                                chapter = chapName,
-                                                folder = folderName,
-                                                title = lessonTitle,
-                                                videoLink = if (selectedVideoUri != null) selectedVideoUri.toString() else videoLinkInput.trim(),
-                                                pdfLink = if (selectedPdfUri != null) selectedPdfUri.toString() else (if (pdfNameInput.isNotBlank()) "${pdfNameInput.trim()}.pdf" else "Class_Handout.pdf"),
-                                                pdfName = if (pdfNameInput.isNotBlank()) pdfNameInput.trim() else "Study notes compilation",
-                                                pdfContent = if (pdfContentInput.isNotBlank()) pdfContentInput.trim() else (if (selectedPdfName.isNotBlank()) "Loaded Local PDF Notes: $selectedPdfName" else ""),
-                                                fileSize = pdfSizeInput,
-                                                thumbnailUrl = thumbnailUrlInput
-                                            )
-                                            Toast.makeText(context, "Lesson Notes & Lecture Add successful! 📂", Toast.LENGTH_SHORT).show()
-                                            // Reset inputs except folderName so they can easily upload more videos to the same folder!
-                                            chapName = ""
-                                            lessonTitle = ""
-                                            videoLinkInput = ""
-                                            thumbnailUrlInput = ""
-                                            selectedVideoUri = null
-                                            selectedVideoName = ""
-                                            pdfNameInput = ""
-                                            pdfContentInput = ""
-                                            pdfSizeInput = "10.5 MB"
-                                            selectedPdfUri = null
-                                            selectedPdfName = ""
-                                            selectedLessonThumbnailUri = null
-                                            selectedLessonThumbnailName = ""
-                                        }
-                                    },
-                                    modifier = Modifier.align(Alignment.End)
-                                ) {
-                                    Text("Upload Notes & Lecture")
-                                }
+                                    }
+                                ) { Icon(Icons.Default.Delete, "Delete", tint = Color.Red) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
-                                Spacer(modifier = Modifier.height(20.dp))
-                                HorizontalDivider(thickness = 1.dp, color = Color.Gray.copy(alpha = 0.3f))
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    "Uploaded Lectures & Folders (${currentLessons.size})",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                if (currentLessons.isEmpty()) {
-                                    Text("No lectures uploaded yet in this course.", fontSize = 12.sp, color = Color.Gray)
+    if (renamingSubjectOld.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { renamingSubjectOld = "" },
+            title = { Text("Rename Subject", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text("Enter new name for Subject '$renamingSubjectOld':", fontSize = 13.sp, color = Color.Gray)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedTextField(value = renamingSubjectNew, onValueChange = { renamingSubjectNew = it }, label = { Text("Subject Name") })
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (renamingSubjectNew.isBlank()) {
+                            Toast.makeText(context, "Cannot be empty", Toast.LENGTH_SHORT).show()
+                        } else {
+                            isOperating = true
+                            R2SupabaseManager.renameSubject(context, selectedBatchName, renamingSubjectOld, renamingSubjectNew.trim()) { success, err ->
+                                isOperating = false
+                                renamingSubjectOld = ""
+                                if (success) {
+                                    Toast.makeText(context, "Subject renamed globally! 🎉", Toast.LENGTH_SHORT).show()
+                                    onRenameDeleteSuccess()
                                 } else {
-                                    val groupedSelected = remember(currentLessons) {
-                                        currentLessons.groupBy { it.chapterName }.mapValues { entry ->
-                                            entry.value.groupBy { it.folder }
+                                    Toast.makeText(context, "Rename failed: $err", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    }
+                ) { Text("Rename") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renamingSubjectOld = "" }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (isOperating) {
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator()
+        }
+    }
+}
+
+// ==========================================
+// 4. MANAGE CHAPTERS SCREEN
+// ==========================================
+@Composable
+fun ManageChaptersScreen(
+    courses: List<CourseEntity>,
+    summaryVideos: List<SupabaseVideo>,
+    viewModel: AcademyViewModel,
+    onRenameDeleteSuccess: () -> Unit
+) {
+    val context = LocalContext.current
+    var selectedBatchName by remember { mutableStateOf("") }
+    var selectedSubjectName by remember { mutableStateOf("") }
+
+    val existingBatches = remember(courses) { courses.map { it.title.trim() }.distinct().filter { it.isNotBlank() } }
+    
+    val existingSubjects = remember(summaryVideos, selectedBatchName) {
+        summaryVideos.filter { it.classText.trim().equals(selectedBatchName.trim(), ignoreCase = true) }
+            .map { it.subject.trim() }.distinct().filter { it.isNotBlank() }
+    }
+
+    val existingChapters = remember(summaryVideos, selectedBatchName, selectedSubjectName) {
+        summaryVideos.filter {
+            it.classText.trim().equals(selectedBatchName.trim(), ignoreCase = true) &&
+            it.subject.trim().equals(selectedSubjectName.trim(), ignoreCase = true)
+        }.map { it.chapter.trim() }.distinct().filter { it.isNotBlank() }
+    }
+
+    var renamingChapterOld by remember { mutableStateOf("") }
+    var renamingChapterNew by remember { mutableStateOf("") }
+    var isOperating by remember { mutableStateOf(false) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Text("Chapter Management", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF1E293B))
+            Text("Select Batch & Subject to load chapters.", fontSize = 12.sp, color = Color.Gray)
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
+        // Selection card
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("1. Choose Batch:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    FlowRowHelper(items = existingBatches, selectedItem = selectedBatchName, onSelected = {
+                        selectedBatchName = it
+                        selectedSubjectName = ""
+                    })
+
+                    if (selectedBatchName.isNotEmpty()) {
+                        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
+                        Text("2. Choose Subject:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        if (existingSubjects.isEmpty()) {
+                            Text("No subjects found.", fontSize = 11.sp, color = Color.Gray)
+                        } else {
+                            FlowRowHelper(items = existingSubjects, selectedItem = selectedSubjectName, onSelected = { selectedSubjectName = it })
+                        }
+                    }
+                }
+            }
+        }
+
+        if (selectedBatchName.isNotEmpty() && selectedSubjectName.isNotEmpty()) {
+            item {
+                Text("Chapters in $selectedSubjectName (${existingChapters.size})", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            }
+
+            if (existingChapters.isEmpty()) {
+                item {
+                    Text("No chapters found.", fontSize = 12.sp, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(32.dp))
+                }
+            } else {
+                items(existingChapters) { chapter ->
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        border = BorderStroke(1.dp, Color.LightGray.copy(alpha = 0.3f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp).fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(chapter, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFF334155), modifier = Modifier.weight(1f))
+                            
+                            Row {
+                                IconButton(
+                                    onClick = {
+                                        renamingChapterOld = chapter
+                                        renamingChapterNew = chapter
+                                    }
+                                ) { Icon(Icons.Default.Edit, "Rename", tint = MaterialTheme.colorScheme.primary) }
+                                
+                                IconButton(
+                                    onClick = {
+                                        isOperating = true
+                                        R2SupabaseManager.deleteChapter(context, selectedBatchName, selectedSubjectName, chapter) { success, err ->
+                                            isOperating = false
+                                            if (success) {
+                                                Toast.makeText(context, "Chapter deleted successfully!", Toast.LENGTH_SHORT).show()
+                                                onRenameDeleteSuccess()
+                                            } else {
+                                                Toast.makeText(context, "Deletion failed: $err", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
                                     }
+                                ) { Icon(Icons.Default.Delete, "Delete", tint = Color.Red) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
-                                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                        groupedSelected.forEach { (chapter, foldersMap) ->
-                                            Card(
-                                                colors = CardDefaults.cardColors(containerColor = Color.White),
-                                                border = BorderStroke(1.dp, Color.LightGray.copy(alpha = 0.4f)),
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                Column(modifier = Modifier.padding(10.dp)) {
-                                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                                        Icon(Icons.Default.Folder, contentDescription = null, tint = Color(0xFFEAB308), modifier = Modifier.size(18.dp))
-                                                        Spacer(modifier = Modifier.width(6.dp))
-                                                        Text(chapter, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF1E293B))
-                                                    }
-                                                    Spacer(modifier = Modifier.height(6.dp))
+    if (renamingChapterOld.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { renamingChapterOld = "" },
+            title = { Text("Rename Chapter", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text("Enter new name for Chapter '$renamingChapterOld':", fontSize = 13.sp, color = Color.Gray)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedTextField(value = renamingChapterNew, onValueChange = { renamingChapterNew = it }, label = { Text("Chapter Name") })
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (renamingChapterNew.isBlank()) {
+                            Toast.makeText(context, "Cannot be empty", Toast.LENGTH_SHORT).show()
+                        } else {
+                            isOperating = true
+                            R2SupabaseManager.renameChapter(context, selectedBatchName, selectedSubjectName, renamingChapterOld, renamingChapterNew.trim()) { success, err ->
+                                isOperating = false
+                                renamingChapterOld = ""
+                                if (success) {
+                                    Toast.makeText(context, "Chapter renamed successfully!", Toast.LENGTH_SHORT).show()
+                                    onRenameDeleteSuccess()
+                                } else {
+                                    Toast.makeText(context, "Rename failed: $err", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    }
+                ) { Text("Rename") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renamingChapterOld = "" }) { Text("Cancel") }
+            }
+        )
+    }
 
-                                                    foldersMap.forEach { (folder, lList) ->
-                                                        Column(modifier = Modifier.padding(start = 12.dp, bottom = 4.dp)) {
-                                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                                Icon(Icons.Default.PlayCircleOutline, contentDescription = null, tint = Color(0xFF6366F1), modifier = Modifier.size(16.dp))
-                                                                Spacer(modifier = Modifier.width(6.dp))
-                                                                Text(folder, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = Color(0xFF475569))
-                                                            }
-                                                            
-                                                            lList.forEach { lesson ->
-                                                                Row(
-                                                                    modifier = Modifier
-                                                                        .fillMaxWidth()
-                                                                        .padding(start = 16.dp, top = 4.dp),
-                                                                    verticalAlignment = Alignment.CenterVertically,
-                                                                    horizontalArrangement = Arrangement.SpaceBetween
-                                                                ) {
-                                                                    Column(modifier = Modifier.weight(1f)) {
-                                                                        Text(lesson.title, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                                                        Text(
-                                                                            text = if (lesson.videoUrl.isBlank()) "No Video" else "Video: ${lesson.videoUrl}",
-                                                                            fontSize = 10.sp,
-                                                                            color = Color.Gray,
-                                                                            maxLines = 1,
-                                                                            overflow = TextOverflow.Ellipsis
-                                                                        )
-                                                                    }
-                                                                    IconButton(
-                                                                        onClick = {
-                                                                            viewModel.adminDeleteLesson(lesson.id, course.id)
-                                                                            Toast.makeText(context, "Syllabus item deleted!", Toast.LENGTH_SHORT).show()
-                                                                        },
-                                                                        modifier = Modifier.size(24.dp)
-                                                                    ) {
-                                                                        Icon(
-                                                                            imageVector = Icons.Default.Delete,
-                                                                            contentDescription = "Delete Lesson",
-                                                                            tint = Color.Red,
-                                                                            modifier = Modifier.size(16.dp)
-                                                                        )
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
+    if (isOperating) {
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator()
+        }
+    }
+}
+
+// ==========================================
+// 5. MANAGE VIDEOS SCREEN
+// ==========================================
+@Composable
+fun ManageVideosScreen(
+    courses: List<CourseEntity>,
+    summaryVideos: List<SupabaseVideo>,
+    viewModel: AcademyViewModel,
+    onVideoDeleteSuccess: () -> Unit
+) {
+    val context = LocalContext.current
+    var selectedBatchName by remember { mutableStateOf("") }
+    var selectedSubjectName by remember { mutableStateOf("") }
+    var selectedChapterName by remember { mutableStateOf("") }
+
+    // State of actually fetched complete video entries
+    var videoListDetailed by remember { mutableStateOf<List<SupabaseVideo>>(emptyList()) }
+    var isLoadingDetailed by remember { mutableStateOf(false) }
+
+    fun loadDetailedVideos() {
+        if (selectedBatchName.isNotEmpty() && selectedSubjectName.isNotEmpty() && selectedChapterName.isNotEmpty()) {
+            isLoadingDetailed = true
+            R2SupabaseManager.fetchVideosForChapter(context, selectedBatchName, selectedSubjectName, selectedChapterName) { list, error ->
+                isLoadingDetailed = false
+                if (list != null) {
+                    videoListDetailed = list
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(selectedBatchName, selectedSubjectName, selectedChapterName) {
+        loadDetailedVideos()
+    }
+
+    val existingBatches = remember(courses) { courses.map { it.title.trim() }.distinct().filter { it.isNotBlank() } }
+    
+    val existingSubjects = remember(summaryVideos, selectedBatchName) {
+        summaryVideos.filter { it.classText.trim().equals(selectedBatchName.trim(), ignoreCase = true) }
+            .map { it.subject.trim() }.distinct().filter { it.isNotBlank() }
+    }
+
+    val existingChapters = remember(summaryVideos, selectedBatchName, selectedSubjectName) {
+        summaryVideos.filter {
+            it.classText.trim().equals(selectedBatchName.trim(), ignoreCase = true) &&
+            it.subject.trim().equals(selectedSubjectName.trim(), ignoreCase = true)
+        }.map { it.chapter.trim() }.distinct().filter { it.isNotBlank() }
+    }
+
+    // Video Editing Form Modal
+    var editingVideo by remember { mutableStateOf<SupabaseVideo?>(null) }
+    var editTitle by remember { mutableStateOf("") }
+    var editDesc by remember { mutableStateOf("") }
+    var editDuration by remember { mutableStateOf("") }
+    var editOrder by remember { mutableStateOf("") }
+    var editVisible by remember { mutableStateOf(true) }
+    var isOperating by remember { mutableStateOf(false) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Text("Video & Lecture Management", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF1E293B))
+            Text("Select Batch, Subject & Chapter to view lectures.", fontSize = 12.sp, color = Color.Gray)
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("1. Batch:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+                    FlowRowHelper(items = existingBatches, selectedItem = selectedBatchName, onSelected = {
+                        selectedBatchName = it
+                        selectedSubjectName = ""
+                        selectedChapterName = ""
+                        videoListDetailed = emptyList()
+                    })
+
+                    if (selectedBatchName.isNotEmpty()) {
+                        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
+                        Text("2. Subject:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+                        FlowRowHelper(items = existingSubjects, selectedItem = selectedSubjectName, onSelected = {
+                            selectedSubjectName = it
+                            selectedChapterName = ""
+                            videoListDetailed = emptyList()
+                        })
+                    }
+
+                    if (selectedBatchName.isNotEmpty() && selectedSubjectName.isNotEmpty()) {
+                        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
+                        Text("3. Chapter:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+                        FlowRowHelper(items = existingChapters, selectedItem = selectedChapterName, onSelected = {
+                            selectedChapterName = it
+                            videoListDetailed = emptyList()
+                        })
+                    }
+                }
+            }
+        }
+
+        if (selectedBatchName.isNotEmpty() && selectedSubjectName.isNotEmpty() && selectedChapterName.isNotEmpty()) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Videos in $selectedChapterName", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    if (isLoadingDetailed) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    }
+                }
+            }
+
+            if (videoListDetailed.isEmpty() && !isLoadingDetailed) {
+                item {
+                    Text("No videos found in this chapter.", fontSize = 12.sp, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(32.dp))
+                }
+            } else {
+                items(videoListDetailed) { video ->
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        border = BorderStroke(1.dp, Color.LightGray.copy(alpha = 0.3f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(video.title, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFF1E293B))
+                                    Text("Order No: ${video.orderNumber} • Duration: ${video.duration}", fontSize = 11.sp, color = Color.Gray)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (video.visibility) Color(0xFFDCFCE7) else Color(0xFFFEE2E2))
+                                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = if (video.visibility) "Published" else "Hidden",
+                                        color = if (video.visibility) Color(0xFF15803D) else Color(0xFFB91C1C),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+
+                            if (video.description.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(video.description, fontSize = 12.sp, color = Color.Gray)
+                            }
+
+                            // Show linked PDFs summary
+                            if (!video.pdfUrl.isNullOrBlank()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(Color(0xFFF1F5F9))
+                                        .padding(8.dp)
+                                ) {
+                                    val pdfs = video.pdfUrl.split("|")
+                                    Column {
+                                        Text("Linked Study Materials:", fontWeight = FontWeight.Bold, fontSize = 10.sp, color = Color.DarkGray)
+                                        pdfs.forEachIndexed { idx, url ->
+                                            if (url.isNotBlank()) {
+                                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                                                    Icon(Icons.Default.PictureAsPdf, null, tint = Color(0xFFEF4444), modifier = Modifier.size(12.dp))
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text("PDF ${idx + 1}: Active Handout", fontSize = 10.sp, color = Color.Gray)
                                                 }
                                             }
                                         }
                                     }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                            HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        editingVideo = video
+                                        editTitle = video.title
+                                        editDesc = video.description
+                                        editDuration = video.duration
+                                        editOrder = video.orderNumber.toString()
+                                        editVisible = video.visibility
+                                    }
+                                ) {
+                                    Icon(Icons.Default.Edit, null, modifier = Modifier.size(13.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Edit")
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                TextButton(
+                                    onClick = {
+                                        isOperating = true
+                                        R2SupabaseManager.deleteVideo(context, video.id) { success, err ->
+                                            isOperating = false
+                                            if (success) {
+                                                Toast.makeText(context, "Video Deleted!", Toast.LENGTH_SHORT).show()
+                                                loadDetailedVideos()
+                                                onVideoDeleteSuccess()
+                                            } else {
+                                                Toast.makeText(context, "Failed: $err", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Icon(Icons.Default.Delete, null, modifier = Modifier.size(13.dp), tint = Color.Red)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Delete", color = Color.Red)
                                 }
                             }
                         }
@@ -644,9 +1809,65 @@ fun AdminCourseManager(viewModel: AcademyViewModel) {
                 }
             }
         }
+    }
 
-        item {
-            Spacer(modifier = Modifier.height(32.dp))
+    if (editingVideo != null) {
+        AlertDialog(
+            onDismissRequest = { editingVideo = null },
+            title = { Text("Edit Lecture Details", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = editTitle, onValueChange = { editTitle = it }, label = { Text("Lecture Title") })
+                    OutlinedTextField(value = editDesc, onValueChange = { editDesc = it }, label = { Text("Description") }, minLines = 2)
+                    OutlinedTextField(value = editDuration, onValueChange = { editDuration = it }, label = { Text("Duration (e.g. 45:00)") })
+                    OutlinedTextField(value = editOrder, onValueChange = { editOrder = it }, label = { Text("Order number") })
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = editVisible, onCheckedChange = { editVisible = it })
+                        Text("Visible to Students", fontSize = 13.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (editTitle.isBlank()) {
+                            Toast.makeText(context, "Title required", Toast.LENGTH_SHORT).show()
+                        } else {
+                            isOperating = true
+                            R2SupabaseManager.updateVideo(
+                                context = context,
+                                id = editingVideo!!.id,
+                                title = editTitle.trim(),
+                                description = editDesc.trim(),
+                                duration = editDuration.trim(),
+                                orderNumber = editOrder.toIntOrNull() ?: 1,
+                                visibility = editVisible
+                            ) { success, err ->
+                                isOperating = false
+                                editingVideo = null
+                                if (success) {
+                                    Toast.makeText(context, "Lecture updated successfully!", Toast.LENGTH_SHORT).show()
+                                    loadDetailedVideos()
+                                } else {
+                                    Toast.makeText(context, "Update failed: $err", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    }
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingVideo = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (isOperating) {
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator()
         }
     }
 }

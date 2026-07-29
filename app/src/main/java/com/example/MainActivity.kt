@@ -12,30 +12,39 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.screens.MainAppScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.AcademyViewModel
+import com.example.ui.screens.PipHelper
+
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
+    installSplashScreen()
     super.onCreate(savedInstanceState)
-    
-    // Proactively create WebView Code Cache directories to prevent Chromium from logging "No such file or directory" opendir errors.
-    try {
-      val jsDir = java.io.File(cacheDir, "WebView/Default/HTTP Cache/Code Cache/js")
-      val wasmDir = java.io.File(cacheDir, "WebView/Default/HTTP Cache/Code Cache/wasm")
-      if (!jsDir.exists()) {
-        jsDir.mkdirs()
-      }
-      if (!wasmDir.exists()) {
-        wasmDir.mkdirs()
-      }
-    } catch (e: Exception) {
-      android.util.Log.e("WebViewSetup", "Error creating WebView cache dirs: ${e.message}")
-    }
-
     enableEdgeToEdge()
     setContent {
       val viewModel: AcademyViewModel = viewModel()
       MainAppScreen(viewModel = viewModel)
     }
   }
+
+  override fun onUserLeaveHint() {
+    super.onUserLeaveHint()
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O && PipHelper.isVideoPlaying) {
+      val params = android.app.PictureInPictureParams.Builder()
+        .setAspectRatio(android.util.Rational(16, 9))
+        .build()
+      enterPictureInPictureMode(params)
+    }
+  }
+
+  override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
+    super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+    if (isInPictureInPictureMode) {
+      PipHelper.onPipEntered?.invoke()
+    } else {
+      PipHelper.onPipExited?.invoke()
+    }
+  }
 }
+
 

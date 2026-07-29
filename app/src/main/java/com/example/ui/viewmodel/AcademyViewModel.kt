@@ -1,6 +1,9 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
+import android.net.Uri
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -10,7 +13,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
 import com.example.data.*
-import com.example.ui.screens.extractYouTubeVideoId
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Types
@@ -18,6 +20,8 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 // Simple presentation class for Authenticated User
 data class AppUser(
@@ -40,10 +44,108 @@ data class ActiveTestProgress(
     val testScore: TestScoreEntity? = null
 )
 
+data class YouTubeMetadata(
+    val videoId: String,
+    val title: String,
+    val thumbnailUrl: String,
+    val status: String, // "Live", "Upcoming", "Ended"
+    val isLive: Boolean
+)
+
+fun extractYoutubeVideoId(input: String): String {
+    val trimmed = input.trim()
+    if (trimmed.length == 11 && !trimmed.contains("/") && !trimmed.contains("?") && !trimmed.contains(".") && !trimmed.contains(":")) {
+        return trimmed
+    }
+    val pattern = "(?:youtube\\.com\\/(?:[^\\/]+\\/.+\\/|(?:v|e(?:mbed)?|live)\\/" +
+            "|.*[?&]v=)|youtu\\.be\\/)([^\"&?\\/\\s]{11})"
+    val matcher = java.util.regex.Pattern.compile(pattern).matcher(trimmed)
+    if (matcher.find()) {
+        return matcher.group(1) ?: trimmed
+    }
+    return trimmed
+}
+
+suspend fun fetchYouTubeMetadata(urlOrId: String): YouTubeMetadata = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    val videoId = extractYoutubeVideoId(urlOrId)
+    var fetchedTitle = "Lakshya Live Class"
+    var thumbnailUrl = if (videoId.isNotBlank()) "https://img.youtube.com/vi/$videoId/hqdefault.jpg" else ""
+    var status = "Live"
+    var isLive = true
+
+    if (videoId.isNotBlank()) {
+        // 1. Fetch title and thumbnail via YouTube oEmbed
+        try {
+            val oembedUrl = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$videoId&format=json"
+            val conn = (java.net.URL(oembedUrl).openConnection() as java.net.HttpURLConnection).apply {
+                connectTimeout = 4000
+                readTimeout = 4000
+                requestMethod = "GET"
+                setRequestProperty("User-Agent", "Mozilla/5.0")
+            }
+            if (conn.responseCode == 200) {
+                val jsonStr = conn.inputStream.bufferedReader().use { it.readText() }
+                val json = org.json.JSONObject(jsonStr)
+                if (json.has("title") && json.getString("title").isNotBlank()) {
+                    fetchedTitle = json.getString("title")
+                }
+                if (json.has("thumbnail_url") && json.getString("thumbnail_url").isNotBlank()) {
+                    thumbnailUrl = json.getString("thumbnail_url")
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 2. Scan watch HTML for live / upcoming / ended status
+        try {
+            val watchUrl = "https://www.youtube.com/watch?v=$videoId"
+            val conn = (java.net.URL(watchUrl).openConnection() as java.net.HttpURLConnection).apply {
+                connectTimeout = 4000
+                readTimeout = 4000
+                requestMethod = "GET"
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            }
+            if (conn.responseCode == 200) {
+                val html = conn.inputStream.bufferedReader().use { reader ->
+                    val sb = StringBuilder()
+                    var line: String?
+                    var bytesRead = 0
+                    while (reader.readLine().also { line = it } != null && bytesRead < 250000) {
+                        sb.append(line)
+                        bytesRead += line?.length ?: 0
+                    }
+                    sb.toString()
+                }
+                if (html.contains("\"isLive\":true") || html.contains("\"isLiveNow\":true") || html.contains("\"style\":\"LIVE\"") || html.contains("isLiveStream\":true") || html.contains("LIVE_NOW")) {
+                    status = "Live"
+                    isLive = true
+                } else if (html.contains("\"isUpcoming\":true") || html.contains("upcomingEventData") || html.contains("\"UPCOMING\"") || html.contains("scheduledStartTime")) {
+                    status = "Upcoming"
+                    isLive = false
+                } else if (html.contains("\"isLiveContent\":true")) {
+                    status = "Ended"
+                    isLive = false
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    YouTubeMetadata(
+        videoId = videoId,
+        title = fetchedTitle,
+        thumbnailUrl = thumbnailUrl,
+        status = status,
+        isLive = isLive
+    )
+}
+
 class AcademyViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val database = AcademyDatabase.getDatabase(application)
-    private val repository = AcademyRepository(database.academyDao())
+    val appUpdateManager = com.example.util.AppUpdateManager(application.applicationContext)
+    val repository = AcademyRepository(application.applicationContext)
     private val prefs = application.getSharedPreferences("lakshya_app_prefs", android.content.Context.MODE_PRIVATE)
 
     // --- Authentication State ---
@@ -149,14 +251,14 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         val currentWeek = cal.get(java.util.Calendar.WEEK_OF_YEAR)
         val currentYear = cal.get(java.util.Calendar.YEAR)
 
-        val limit = database.academyDao().getVideoLimit(email)
+        val limit = repository.getVideoLimit(email)
         return if (limit == null || limit.weekOfYear != currentWeek || limit.year != currentYear) {
             // New week or new user
-            database.academyDao().insertVideoLimit(AiVideoLimitEntity(email, 1, currentWeek, currentYear))
+            repository.insertVideoLimit(AiVideoLimitEntity(email, 1, currentWeek, currentYear))
             true
         } else {
             if (limit.count < 3) {
-                database.academyDao().insertVideoLimit(limit.copy(count = limit.count + 1))
+                repository.insertVideoLimit(limit.copy(count = limit.count + 1))
                 true
             } else {
                 false
@@ -170,7 +272,7 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         val currentWeek = cal.get(java.util.Calendar.WEEK_OF_YEAR)
         val currentYear = cal.get(java.util.Calendar.YEAR)
 
-        val limit = database.academyDao().getVideoLimit(email)
+        val limit = repository.getVideoLimit(email)
         return if (limit == null || limit.weekOfYear != currentWeek || limit.year != currentYear) {
             3
         } else {
@@ -180,8 +282,6 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
 
     // Simple user registry database simulation (in-memory persistent during app run)
     private val registeredUsers = mutableStateMapOf<String, AppUser>().apply {
-        put("student@lakshya.com", AppUser("student@lakshya.com", "Anand Yadav", "STUDENT", "📚"))
-        put("admin@lakshya.com", AppUser("admin@lakshya.com", "Director Sir (Ghazipur)", "ADMIN", "🎖️"))
         put("academylakshya112@gmail.com", AppUser("academylakshya112@gmail.com", "Director Sir (LAKSHYA)", "ADMIN", "🎖️"))
     }
 
@@ -227,6 +327,11 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
 
     // --- State flows from Repository ---
     val allCourses: StateFlow<List<CourseEntity>> = repository.allCourses
+        .onEach { list ->
+            list.forEach { 
+                android.util.Log.d("AcademyViewModel", "[VIEWMODEL] Observed Course - ID: ${it.id}, Title: ${it.title}, Image URL: ${it.imageUrl}")
+            }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allBanners: StateFlow<List<BannerEntity>> = repository.allBanners
@@ -289,6 +394,17 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
     var activeLiveIsScheduled by mutableStateOf(true)
 
     init {
+        // Start Weekly Mock Test Generator Scheduler
+        try {
+            com.example.service.WeeklyMockTestGenerator.startScheduler(application, repository)
+        } catch (e: Exception) {
+            android.util.Log.e("AcademyViewModel", "Error starting WeeklyMockTestGenerator: ${e.message}")
+        }
+
+        viewModelScope.launch {
+            repository.syncAllFromRemote()
+            checkForUpdates()
+        }
         // Load dynamically registered users
         try {
             prefs.all.forEach { (key, value) ->
@@ -333,77 +449,55 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         // First startup seed and auto-fill lists
         viewModelScope.launch {
             try {
-                seedDatabaseIfEmpty()
-                updateClass7Video()
-                updateClass9Video()
-                forceReSeedTestsIfNeeded()
                 observeMaterials()
+                // Fetch latest data from backend directly
+                repository.syncAllFromRemote()
             } catch (e: Exception) {
                 android.util.Log.e("AcademyViewModel", "Error in startup tasks: ${e.message}")
             }
         }
     }
 
-    private suspend fun updateClass7Video() {
-        try {
-            val courses = repository.allCourses.first()
-            val class7Course = courses.find { it.category == "Class 7" }
-            if (class7Course != null) {
-                val lessons = repository.getLessonsForCourse(class7Course.id).first()
-                val targetUrl = "https://youtu.be/EWAI1fi3k7Y"
-                val targetVideoId = extractYouTubeVideoId(targetUrl) ?: ""
-                
-                // Update any lesson in Class 7 that doesn't have the new URL yet
-                // Or specifically target the one with the placeholder w3schools URL
-                val staleLesson = lessons.find { 
-                    it.videoUrl == "https://www.w3schools.com/html/mov_bbb.mp4" || 
-                    (it.title == "Chapter 3: The Delhi Sultans Summary" && it.videoUrl != targetUrl)
-                }
-                
-                if (staleLesson != null) {
-                    android.util.Log.d("VideoSystem", "Updating Class 7 lesson ${staleLesson.id} to new YouTube URL")
-                    repository.insertLesson(
-                        staleLesson.copy(
-                            videoUrl = targetUrl,
-                            youtubeVideoId = targetVideoId,
-                            thumbnailUrl = "" // Trigger re-generation
-                        )
-                    )
-                }
+    fun syncFromRemote() {
+        viewModelScope.launch {
+            try {
+                repository.syncAllFromRemote()
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "Manual sync failed", e)
             }
-        } catch (e: Exception) {
-            android.util.Log.e("VideoSystem", "Error in updateClass7Video: ${e.message}")
         }
     }
 
-    private suspend fun updateClass9Video() {
+    private suspend fun ensureClass9TestVideoSeeded() {
         try {
             val courses = repository.allCourses.first()
             val class9Course = courses.find { it.category == "Class 9" }
             if (class9Course != null) {
                 val lessons = repository.getLessonsForCourse(class9Course.id).first()
-                val targetUrl = "https://youtu.be/0JT9Y7_hV0k?si=oTUMMfpEJjRiTyrH"
-                val targetVideoId = "0JT9Y7_hV0k"
-                
-                // Find the specific lesson targeting Class 9 Physics/Motion
-                val targetLesson = lessons.find { 
-                    (it.videoUrl != targetUrl) && 
-                    (it.title.contains("Motion") || it.videoUrl == "https://www.w3schools.com/html/mov_bbb.mp4")
-                }
-                
-                if (targetLesson != null) {
-                    android.util.Log.d("VideoSystem", "Updating Class 9 lesson ${targetLesson.id} to: $targetUrl")
+                val hasTestVideo = lessons.any { it.videoUrl == "https://youtu.be/EWAI1fi3k7Y" }
+                if (!hasTestVideo) {
                     repository.insertLesson(
-                        targetLesson.copy(
-                            videoUrl = targetUrl,
-                            youtubeVideoId = targetVideoId,
-                            thumbnailUrl = "" // repository.insertLesson will re-generate based on new ID
+                        LessonEntity(
+                            courseId = class9Course.id,
+                            chapterName = "Physics - Motion",
+                            title = "Chapter 8: Real Physics Demo Lecture (YouTube Test)",
+                            videoUrl = "https://youtu.be/EWAI1fi3k7Y",
+                            pdfUrl = "Class9_Motion_Demo_Notes.pdf",
+                            pdfName = "Laws of Motion Notes Compilation",
+                            folder = "All video"
                         )
                     )
+                    // Update total lessons count
+                    repository.updateCourse(class9Course.copy(totalLessons = lessons.size + 1))
+                    android.util.Log.d("VideoSystem", "Successfully seeded YouTube test video into Class 9th course")
+                } else {
+                    android.util.Log.d("VideoSystem", "YouTube test video already seeded in Class 9th course")
                 }
+            } else {
+                android.util.Log.e("VideoSystem", "Could not find Class 9 course to seed YouTube video")
             }
         } catch (e: Exception) {
-            android.util.Log.e("VideoSystem", "Error in updateClass9Video: ${e.message}")
+            android.util.Log.e("VideoSystem", "Error in ensureClass9TestVideoSeeded: ${e.message}")
         }
     }
 
@@ -440,7 +534,7 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                     isFree = false,
                     price = 1499.00,
                     totalLessons = 14,
-                    imageUrl = "https://picsum.photos/seed/nda_shaurya/600/350"
+                    imageUrl = "https://picsum.photos/seed/nda_shaurya/600/350",
                 )
             )
 
@@ -453,7 +547,7 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                     isFree = false,
                     price = 639.00,
                     totalLessons = 8,
-                    imageUrl = "https://picsum.photos/seed/rrb_tejas/600/350"
+                    imageUrl = "https://picsum.photos/seed/rrb_tejas/600/350",
                 )
             )
 
@@ -878,7 +972,7 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                     courseId = c7Id,
                     chapterName = "History - Delhi Sultans",
                     title = "Chapter 3: The Delhi Sultans Summary",
-                    videoUrl = "https://youtu.be/EWAI1fi3k7Y",
+                    videoUrl = "https://www.w3schools.com/html/mov_bbb.mp4",
                     pdfUrl = "Class7_History_Ch3.pdf",
                     pdfName = "The Delhi Sultans Revision Notes"
                 )
@@ -900,8 +994,7 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                     courseId = c9Id,
                     chapterName = "Physics - Motion",
                     title = "Chapter 8: Laws of Motion & Graphs",
-                    videoUrl = "https://youtu.be/0JT9Y7_hV0k?si=oTUMMfpEJjRiTyrH",
-                    youtubeVideoId = "0JT9Y7_hV0k",
+                    videoUrl = "https://www.w3schools.com/html/mov_bbb.mp4",
                     pdfUrl = "Class9_Physics_Motion.pdf",
                     pdfName = "Equations of Motion Graphical Derivations"
                 )
@@ -1168,59 +1261,71 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
             )
         }
 
-        // Seed default banners if empty and not seeded before
-        val hasSeededBanners = prefs.getBoolean("has_seeded_banners_v3", false)
-        if (!hasSeededBanners) {
-            val bannerCheck = repository.allBanners.first()
-            if (bannerCheck.isEmpty()) {
-                repository.insertBanner(
-                    BannerEntity(
-                        title = "Join Our Facebook Community! 👥",
-                        imageUrl = "https://images.unsplash.com/photo-1543269865-cbf427effbad?w=600&auto=format&fit=crop&q=60",
-                        linkUrl = "https://www.facebook.com/share/1Ld9zB8Khi/",
-                        buttonText = "FOLLOW PAGE",
-                        description = "Stay updated with announcements, class schedules and community discussions on our official Facebook Page."
-                    )
-                )
-                repository.insertBanner(
-                    BannerEntity(
-                        title = "लक्ष्य बैच (Lakshya Batch) 2024-25 - YouTube पर पहली बार FREE!",
-                        imageUrl = "android.resource://com.aistudio.lakshya_academy.gzkvpm/drawable/lakshya_batch_banner_1781437391844",
-                        linkUrl = "COURSES",
-                        buttonText = "Watch Now",
-                        description = "Features: Live classes, notes, test series, 100% preparation by Pankaj sir, Kamlesh sir, Dushyant sir."
-                    )
-                )
-                repository.insertBanner(
-                    BannerEntity(
-                        title = "Follow Our Instagram for Daily GK Reels! 📲",
-                        imageUrl = "https://images.unsplash.com/photo-1611262588024-d12430b98920?w=600&auto=format&fit=crop&q=60",
-                        linkUrl = "https://www.instagram.com/lakshya_academy_sirgitha_gzpr?igsh=MXU5eHVicWRhNmgwag==",
-                        buttonText = "FOLLOW US",
-                        description = "Get short tricks, current affairs quiz and exam notification reels directly on Instagram!"
-                    )
-                )
-                repository.insertBanner(
-                    BannerEntity(
-                        title = "Join Official Telegram Study Channel! 💎",
-                        imageUrl = "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=600&auto=format&fit=crop&q=60",
-                        linkUrl = "https://t.me/lakshya_academy",
-                        buttonText = "JOIN NOW",
-                        description = "Download free PDFs, class notes, schedules & interactive discussion worksheets instantly."
-                    )
-                )
-                repository.insertBanner(
-                    BannerEntity(
-                        title = "Lakshya All-Subject Special Batch Starting! 🔴",
-                        imageUrl = "https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=600&auto=format&fit=crop&q=60",
-                        linkUrl = "COURSES",
-                        buttonText = "ENROLL",
-                        description = "A new high-yield mock-test batch containing All-Subject lessons starts this Monday. Secure your rank now!"
-                    )
-                )
+        // Clean up any existing demo/seeded banners from local and remote DB
+        viewModelScope.launch {
+            try {
+                val currentBanners = repository.allBanners.first()
+                currentBanners.forEach { banner ->
+                    if (banner.imageUrl.contains("android.resource://") || 
+                        banner.title.contains("Join Our Official Telegram") || 
+                        banner.title.contains("Subscribe to Our YouTube") || 
+                        banner.title.contains("Join Our Official WhatsApp") || 
+                        banner.title.contains("Follow Our Instagram")) {
+                        repository.deleteBanner(banner.id)
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "Failed to clear demo banners", e)
             }
-            prefs.edit().putBoolean("has_seeded_banners_v3", true).apply()
         }
+    }
+
+    fun checkForUpdates() {
+        viewModelScope.launch {
+            try {
+                android.util.Log.d("AcademyViewModel", "[UPDATE SYSTEM] Checking for updates from Supabase...")
+                val latestUpdate = repository.getLatestAppUpdate()
+                if (latestUpdate == null) {
+                    android.util.Log.d("AcademyViewModel", "[UPDATE SYSTEM] No update details found in database.")
+                    appUpdateManager.setIdle()
+                    return@launch
+                }
+                
+                val context = getApplication<Application>()
+                val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+                val installedVersion = pInfo.versionName ?: "1.0"
+                
+                android.util.Log.d("AcademyViewModel", "[UPDATE SYSTEM] Installed Version: $installedVersion, Latest: ${latestUpdate.latestVersion}, Minimum: ${latestUpdate.minimumVersion}")
+                
+                val hasNewer = compareVersions(latestUpdate.latestVersion, installedVersion) > 0
+                val isBelowMin = compareVersions(installedVersion, latestUpdate.minimumVersion) < 0
+                val isForce = latestUpdate.forceUpdate || isBelowMin
+                
+                if (hasNewer) {
+                    android.util.Log.i("AcademyViewModel", "[UPDATE SYSTEM] New version available! Force Update: $isForce")
+                    appUpdateManager.setUpdateAvailable(latestUpdate, isForce)
+                } else {
+                    android.util.Log.d("AcademyViewModel", "[UPDATE SYSTEM] Application is up-to-date.")
+                    appUpdateManager.setIdle()
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "[UPDATE SYSTEM] Error checking for updates: ${e.message}", e)
+            }
+        }
+    }
+    
+    private fun compareVersions(v1: String, v2: String): Int {
+        val s1 = v1.split(".").mapNotNull { it.toIntOrNull() }
+        val s2 = v2.split(".").mapNotNull { it.toIntOrNull() }
+        val maxLen = maxOf(s1.size, s2.size)
+        for (i in 0 until maxLen) {
+            val val1 = if (i < s1.size) s1[i] else 0
+            val val2 = if (i < s2.size) s2[i] else 0
+            if (val1 != val2) {
+                return val1.compareTo(val2)
+            }
+        }
+        return 0
     }
 
     // --- Authentication Actions ---
@@ -1241,7 +1346,7 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
             val formattedEmail = email.trim().lowercase()
             
             // Restrict ADMIN workspace login to authorized emails only
-            if (role == "ADMIN" && formattedEmail != "admin@lakshya.com" && formattedEmail != "academylakshya112@gmail.com") {
+            if (role == "ADMIN" && formattedEmail != "academylakshya112@gmail.com") {
                 authError = "Access Denied: '$email' is not registered as an authorized Academy Admin. Only genuine Lakshmi/Lakshya Academy Directors can access the Admin Desk."
                 return@launch
             }
@@ -1282,6 +1387,17 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
             }
             
             currentUser = finalProfile
+            
+            if (finalProfile.role == "ADMIN") {
+                android.util.Log.i("AcademyViewModel", "[BATCH SYNC] Admin logged in successfully! Automatically triggering sync from remote Supabase...")
+                viewModelScope.launch {
+                    try {
+                        repository.syncAllFromRemote()
+                    } catch (e: Exception) {
+                        android.util.Log.e("AcademyViewModel", "[BATCH SYNC] Automatic sync after Admin login failed", e)
+                    }
+                }
+            }
             
             // Save user login session details
             try {
@@ -1599,36 +1715,25 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    // --- Live Class Mock Simulation ---
+    // --- Live Class Actions ---
     fun joinLiveClass() {
         liveClassRoomActive = true
-        liveViewerCount = (120..180).random()
+        liveViewerCount = 0
         liveChatMessageList.clear()
-        
-        // Populate chat with realistic stream of exam chats
-        viewModelScope.launch {
-            val names = listOf("Rahul Gaur", "Prachi Singh", "Deepak Bind", "Shivani Yadav", "Amit Pal", "Alok Patel")
-            val chats = listOf(
-                "Good evening sir! Very excited for Polity today.",
-                "Sir, in kesavananda case, what was the judges ratio?",
-                "Ghazipur branch notes are premium. Clear audio!",
-                "Amazing session! Thank you sir. Please increase weekly PDF lectures.",
-                "Is UP police test series live inside app dashboard?",
-                "Yes Rahul, we can click Test Series to take the paper now."
-            )
-            
-            for (i in 0 until 5) {
-                if (!liveClassRoomActive) break
-                delay(800)
-                liveChatMessageList[System.nanoTime()] = Pair(names.random(), chats.random())
-            }
+    }
+
+    suspend fun getLiveClassFromSupabase(id: Int): LiveClassEntity? {
+        return try {
+            val list = repository.getRemoteLiveClassesDirect()
+            list.find { it.id == id }
+        } catch (e: Exception) {
+            android.util.Log.e("AcademyViewModel", "Failed to get live class from Supabase", e)
+            null
         }
     }
 
     fun sendLiveMessage(txt: String) {
-        val user = currentUser ?: return
-        if (txt.isBlank()) return
-        liveChatMessageList[System.nanoTime()] = Pair(user.name, txt.trim())
+        // Live chat is not implemented per instructions
     }
 
     fun leaveLiveClass() {
@@ -1640,7 +1745,32 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         if (currentUser?.role != "ADMIN") return
         if (title.isBlank() || subject.isBlank() || desc.isBlank()) return
         viewModelScope.launch {
-            repository.insertCourse(
+            var finalImageUrl = imageUrl.trim()
+            if (finalImageUrl.startsWith("content://") || finalImageUrl.startsWith("file://")) {
+                try {
+                    val context = getApplication<Application>()
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Uploading batch cover image to Supabase Storage...", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    val uploadedUrl = uploadBatchImageWithRetry(context, android.net.Uri.parse(finalImageUrl))
+                    android.util.Log.i("AcademyViewModel", "[UPLOAD SUCCESS] Batch cover image uploaded to Supabase Storage.")
+                    finalImageUrl = uploadedUrl
+                    android.util.Log.i("AcademyViewModel", "[PUBLIC URL] Generated Public Supabase Storage URL: $finalImageUrl")
+                    android.util.Log.i("AcademyViewModel", "[COVER IMAGE] Generated Public Supabase Storage URL: $finalImageUrl")
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Batch cover image uploaded successfully to Supabase!", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("AcademyViewModel", "Failed to upload batch cover image to Supabase, falling back to local uri", e)
+                    val context = getApplication<Application>()
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Failed to upload image: ${e.localizedMessage}", android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+
+            android.util.Log.i("AcademyViewModel", "[DATABASE] Attempting to INSERT new course with Image URL: $finalImageUrl")
+            val newId = repository.insertCourse(
                 CourseEntity(
                     title = title.trim(),
                     category = category,
@@ -1649,15 +1779,23 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                     isFree = isFree,
                     price = if (isFree) 0.0 else price,
                     totalLessons = 0,
-                    imageUrl = imageUrl.trim()
+                    imageUrl = finalImageUrl,
                 )
             )
-            repository.insertNotification(
-                NotificationEntity(
-                    title = "New Course Added! 🎓",
-                    message = "Lakshya Academy just launched '${title}' online batch! Enroll now."
+            
+            if (newId > 0) {
+                android.util.Log.i("AcademyViewModel", "[DATABASE] New course successfully inserted (Local ID: $newId).")
+                repository.insertNotification(
+                    NotificationEntity(
+                        title = "New Course Added! 🎓",
+                        message = "Lakshya Academy just launched '${title}' online batch! Enroll now."
+                    )
                 )
-            )
+                // Reload batches to display new cover image
+                repository.syncAllFromRemote()
+            } else {
+                android.util.Log.e("AcademyViewModel", "[DATABASE] Failed to insert new course locally.")
+            }
         }
     }
 
@@ -1665,6 +1803,55 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         if (currentUser?.role != "ADMIN") return
         viewModelScope.launch {
             repository.deleteCourse(id)
+        }
+    }
+
+    fun adminUpdateCourse(id: Int, title: String, description: String, price: Double, isFree: Boolean, imageUrl: String) {
+        if (currentUser?.role != "ADMIN") return
+        viewModelScope.launch {
+            var finalImageUrl = imageUrl.trim()
+            if (finalImageUrl.startsWith("content://") || finalImageUrl.startsWith("file://")) {
+                try {
+                    val context = getApplication<Application>()
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Uploading updated batch cover image to Supabase Storage...", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    val uploadedUrl = uploadBatchImageWithRetry(context, android.net.Uri.parse(finalImageUrl))
+                    android.util.Log.i("AcademyViewModel", "[UPLOAD SUCCESS] Batch cover image updated successfully on Supabase Storage.")
+                    finalImageUrl = uploadedUrl
+                    android.util.Log.i("AcademyViewModel", "[PUBLIC URL] Generated Public Supabase Storage URL: $finalImageUrl")
+                    android.util.Log.i("AcademyViewModel", "[COVER IMAGE] Generated Public Supabase Storage URL: $finalImageUrl")
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Batch cover image updated successfully on Supabase!", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("AcademyViewModel", "Failed to upload batch cover image to Supabase, falling back to local uri", e)
+                    val context = getApplication<Application>()
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Failed to upload image: ${e.localizedMessage}", android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+
+            val course = allCourses.value.find { it.id == id }
+            if (course != null) {
+                android.util.Log.i("AcademyViewModel", "[DATABASE] Attempting to UPDATE course ID: $id with Image URL: $finalImageUrl")
+                val success = repository.updateCourse(course.copy(
+                    title = title.trim(),
+                    description = description.trim(),
+                    price = price,
+                    isFree = isFree,
+                    imageUrl = finalImageUrl
+                ))
+                
+                if (success) {
+                    android.util.Log.i("AcademyViewModel", "[DATABASE] Course ID: $id successfully updated and synced to Supabase.")
+                    // Force reload to ensure the new cover image is displayed immediately
+                    repository.syncAllFromRemote()
+                } else {
+                    android.util.Log.e("AcademyViewModel", "[DATABASE] Failed to sync course update to Supabase for ID: $id")
+                }
+            }
         }
     }
 
@@ -2046,6 +2233,13 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun adminUpdateTest(test: TestEntity) {
+        if (currentUser?.role != "ADMIN") return
+        viewModelScope.launch {
+            repository.updateTest(test)
+        }
+    }
+
     fun adminUploadMaterial(type: String, title: String, desc: String, size: String, content: String = "") {
         if (currentUser?.role != "ADMIN") return
         if (title.isBlank()) return
@@ -2104,7 +2298,15 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun adminAddBanner(title: String, imageUrl: String, linkUrl: String, buttonText: String, description: String = "") {
+    fun adminAddBanner(
+        title: String,
+        imageUrl: String,
+        linkUrl: String,
+        buttonText: String,
+        description: String = "",
+        isActive: Boolean = true,
+        displayOrder: Int = 0
+    ) {
         if (currentUser?.role != "ADMIN") return
         if (title.isBlank()) return
         viewModelScope.launch {
@@ -2114,16 +2316,747 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                     imageUrl = imageUrl.trim(),
                     linkUrl = linkUrl.trim(),
                     buttonText = if (buttonText.isBlank()) "VIEW" else buttonText.trim(),
-                    description = description.trim()
+                    description = description.trim(),
+                    isActive = isActive,
+                    displayOrder = displayOrder,
+                    createdAt = System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis()
                 )
             )
         }
+    }
+
+    fun adminUpdateBanner(
+        id: Int,
+        title: String,
+        imageUrl: String,
+        linkUrl: String,
+        buttonText: String,
+        description: String = "",
+        isActive: Boolean = true,
+        displayOrder: Int = 0
+    ) {
+        if (currentUser?.role != "ADMIN") return
+        if (title.isBlank()) return
+        viewModelScope.launch {
+            repository.updateBanner(
+                BannerEntity(
+                    id = id,
+                    title = title.trim(),
+                    imageUrl = imageUrl.trim(),
+                    linkUrl = linkUrl.trim(),
+                    buttonText = if (buttonText.isBlank()) "VIEW" else buttonText.trim(),
+                    description = description.trim(),
+                    isActive = isActive,
+                    displayOrder = displayOrder,
+                    createdAt = System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    suspend fun uploadBannerImage(context: Context, uri: Uri): String {
+        return repository.uploadBannerImage(context, uri)
+    }
+
+    suspend fun uploadLiveClassThumbnail(context: Context, uri: Uri): String {
+        return repository.uploadLiveClassThumbnail(context, uri) // Reusing the same generic R2/Supabase upload logic with correct bucket
     }
 
     fun adminDeleteBanner(id: Int) {
         if (currentUser?.role != "ADMIN") return
         viewModelScope.launch {
             repository.deleteBanner(id)
+        }
+    }
+
+    // === Live Classes Admin and Student Operations ===
+    fun createLiveClassFromUrl(
+        youtubeUrl: String,
+        onComplete: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
+        if (currentUser?.role != "ADMIN") return
+        viewModelScope.launch {
+            try {
+                val metadata = fetchYouTubeMetadata(youtubeUrl)
+                if (metadata.videoId.isBlank()) {
+                    onComplete(false, "Invalid YouTube URL or Video ID")
+                    return@launch
+                }
+                val currentDate = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
+                val currentTime = java.text.SimpleDateFormat("hh:mm a", java.util.Locale.getDefault()).format(java.util.Date())
+
+                val liveClass = LiveClassEntity(
+                    title = metadata.title.ifBlank { "Lakshya Live Class" },
+                    description = "Interactive Live Stream on YouTube",
+                    subject = "Live Class",
+                    chapter = "Lakshya Smart Classroom",
+                    teacherName = "Lakshya Academy",
+                    thumbnailUrl = metadata.thumbnailUrl,
+                    youtubeLiveId = metadata.videoId,
+                    youtubeUrl = "https://www.youtube.com/watch?v=${metadata.videoId}",
+                    status = metadata.status,
+                    scheduledDate = currentDate,
+                    scheduledTime = currentTime,
+                    isLive = metadata.isLive
+                )
+                val result = repository.insertLiveClass(liveClass)
+                
+                if (result.isSuccess) {
+                    try {
+                        repository.getRemoteLiveClassesDirect()
+                    } catch (_: Exception) {}
+                    refreshLiveClassesStatus()
+
+                    if (metadata.isLive) {
+                        try {
+                            repository.insertNotification(
+                                NotificationEntity(
+                                    title = "🔴 Live Class Started",
+                                    message = "${metadata.title}\nTap to Join Now!"
+                                )
+                            )
+                        } catch (_: Exception) {}
+                    }
+                    onComplete(true, "Live class added successfully")
+                } else {
+                    val errMsg = result.toFormattedErrorMessage()
+                    Log.e("AcademyViewModel", "createLiveClassFromUrl insert failed:\n$errMsg")
+                    onComplete(false, errMsg)
+                }
+            } catch (e: Exception) {
+                Log.e("AcademyViewModel", "createLiveClassFromUrl error: ${e.message}", e)
+                onComplete(false, "Failed to schedule live class: ${e.message}")
+            }
+        }
+    }
+
+    fun updateLiveClassFromUrl(
+        id: Int,
+        youtubeUrl: String,
+        onComplete: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
+        if (currentUser?.role != "ADMIN") return
+        viewModelScope.launch {
+            try {
+                val metadata = fetchYouTubeMetadata(youtubeUrl)
+                if (metadata.videoId.isBlank()) {
+                    onComplete(false, "Invalid YouTube URL or Video ID")
+                    return@launch
+                }
+                val currentDate = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
+                val currentTime = java.text.SimpleDateFormat("hh:mm a", java.util.Locale.getDefault()).format(java.util.Date())
+
+                val liveClass = LiveClassEntity(
+                    id = id,
+                    title = metadata.title.ifBlank { "Lakshya Live Class" },
+                    description = "Interactive Live Stream on YouTube",
+                    subject = "Live Class",
+                    chapter = "Lakshya Smart Classroom",
+                    teacherName = "Lakshya Academy",
+                    thumbnailUrl = metadata.thumbnailUrl,
+                    youtubeLiveId = metadata.videoId,
+                    youtubeUrl = "https://www.youtube.com/watch?v=${metadata.videoId}",
+                    status = metadata.status,
+                    scheduledDate = currentDate,
+                    scheduledTime = currentTime,
+                    isLive = metadata.isLive
+                )
+                val result = repository.updateLiveClass(liveClass)
+                if (result.isSuccess) {
+                    try {
+                        repository.getRemoteLiveClassesDirect()
+                    } catch (_: Exception) {}
+                    refreshLiveClassesStatus()
+                    onComplete(true, "Live class stream updated!")
+                } else {
+                    val errMsg = result.toFormattedErrorMessage()
+                    Log.e("AcademyViewModel", "updateLiveClassFromUrl update failed:\n$errMsg")
+                    onComplete(false, errMsg)
+                }
+            } catch (e: Exception) {
+                Log.e("AcademyViewModel", "updateLiveClassFromUrl error: ${e.message}", e)
+                onComplete(false, "Error: ${e.message}")
+            }
+        }
+    }
+
+    fun refreshLiveClassesStatus() {
+        viewModelScope.launch {
+            try {
+                repository.getRemoteLiveClassesDirect()
+            } catch (e: Exception) {
+                Log.e("AcademyViewModel", "refreshLiveClassesStatus fetch failed: ${e.message}", e)
+            }
+            val currentClasses = allLiveClasses.value
+            currentClasses.forEach { item ->
+                if (item.effectiveYoutubeId.isNotBlank()) {
+                    try {
+                        val metadata = fetchYouTubeMetadata(item.effectiveYoutubeId)
+                        if (metadata.status != item.status || (metadata.title.isNotBlank() && metadata.title != "Lakshya Live Class" && metadata.title != item.title)) {
+                            val updated = item.copy(
+                                title = if (metadata.title.isNotBlank() && metadata.title != "Lakshya Live Class") metadata.title else item.title,
+                                thumbnailUrl = if (metadata.thumbnailUrl.isNotBlank()) metadata.thumbnailUrl else item.thumbnailUrl,
+                                status = metadata.status,
+                                isLive = metadata.isLive
+                            )
+                            repository.updateLiveClass(updated)
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+        }
+    }
+
+    fun createLiveClass(
+        title: String,
+        description: String,
+        subject: String,
+        chapter: String,
+        teacherName: String,
+        thumbnailUrl: String,
+        youtubeLiveId: String,
+        scheduledDate: String,
+        scheduledTime: String,
+        onComplete: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
+        if (currentUser?.role != "ADMIN") return
+        viewModelScope.launch {
+            val liveClass = LiveClassEntity(
+                title = title.trim(),
+                description = description.trim(),
+                subject = subject.trim(),
+                chapter = chapter.trim(),
+                teacherName = teacherName.trim(),
+                thumbnailUrl = thumbnailUrl.trim(),
+                youtubeLiveId = youtubeLiveId.trim(),
+                status = "Scheduled",
+                scheduledDate = scheduledDate.trim(),
+                scheduledTime = scheduledTime.trim(),
+                isLive = false
+            )
+            val result = repository.insertLiveClass(liveClass)
+            if (result.isSuccess) {
+                try {
+                    repository.getRemoteLiveClassesDirect()
+                } catch (_: Exception) {}
+                refreshLiveClassesStatus()
+                onComplete(true, "Live class added successfully")
+            } else {
+                onComplete(false, result.toFormattedErrorMessage())
+            }
+        }
+    }
+
+    fun updateLiveClassDetails(
+        id: Int,
+        title: String,
+        description: String,
+        subject: String,
+        chapter: String,
+        teacherName: String,
+        thumbnailUrl: String,
+        youtubeLiveId: String,
+        scheduledDate: String,
+        scheduledTime: String,
+        status: String,
+        recordingUri: String = "",
+        onComplete: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
+        if (currentUser?.role != "ADMIN") return
+        viewModelScope.launch {
+            val liveClass = LiveClassEntity(
+                id = id,
+                title = title.trim(),
+                description = description.trim(),
+                subject = subject.trim(),
+                chapter = chapter.trim(),
+                teacherName = teacherName.trim(),
+                thumbnailUrl = thumbnailUrl.trim(),
+                youtubeLiveId = youtubeLiveId.trim(),
+                status = status.trim(),
+                scheduledDate = scheduledDate.trim(),
+                scheduledTime = scheduledTime.trim(),
+                isLive = status.trim().equals("Live", ignoreCase = true),
+                recordingUri = recordingUri.trim()
+            )
+            val result = repository.updateLiveClass(liveClass)
+            if (result.isSuccess) {
+                try {
+                    repository.getRemoteLiveClassesDirect()
+                } catch (_: Exception) {}
+                refreshLiveClassesStatus()
+                onComplete(true, "Live class stream updated!")
+            } else {
+                onComplete(false, result.toFormattedErrorMessage())
+            }
+        }
+    }
+
+    fun startLiveClass(liveClass: LiveClassEntity) {
+        if (currentUser?.role != "ADMIN") return
+        viewModelScope.launch {
+            val updated = liveClass.copy(
+                status = "Live",
+                isLive = true
+            )
+            repository.updateLiveClass(updated)
+            
+            // Send real-time notification to all students
+            repository.insertNotification(
+                NotificationEntity(
+                    title = "🔴 Live Class Started",
+                    message = "Teacher: ${liveClass.teacherName}\nSubject: ${liveClass.subject}\nTap to Join"
+                )
+            )
+        }
+    }
+
+    fun endLiveClass(liveClass: LiveClassEntity, recordingUri: String = "") {
+        if (currentUser?.role != "ADMIN") return
+        viewModelScope.launch {
+            val updated = liveClass.copy(
+                status = "Ended",
+                isLive = false,
+                recordingUri = recordingUri.trim().ifBlank { "https://www.youtube.com/watch?v=${liveClass.youtubeLiveId}" }
+            )
+            repository.updateLiveClass(updated)
+        }
+    }
+
+    fun deleteLiveClass(id: Int) {
+        if (currentUser?.role != "ADMIN") return
+        viewModelScope.launch {
+            val result = repository.deleteLiveClass(id)
+            if (result.isSuccess) {
+                try {
+                    repository.getRemoteLiveClassesDirect()
+                } catch (_: Exception) {}
+                refreshLiveClassesStatus()
+            }
+        }
+    }
+
+    private suspend fun uploadBatchImage(context: Context, fileUri: android.net.Uri): String {
+        android.util.Log.d("AcademyViewModel", "[COVER IMAGE] Starting batch cover image upload. Local URI: $fileUri")
+        
+        val activeProvider = com.example.service.MediaStorageServiceFactory.getService(context).getStorageType()
+        
+        // 1. Upload to the active configured storage provider
+        val uploadedCustomUrl = kotlin.coroutines.suspendCoroutine<String> { continuation ->
+            if (activeProvider == "BACKBLAZE_B2") {
+                com.example.api.BackblazeB2Manager.uploadFileOnlyToBackblazeB2(
+                    context = context,
+                    creds = com.example.api.BackblazeB2Manager.getCredentials(context),
+                    fileUri = fileUri,
+                    onProgress = {},
+                    onSuccess = { url -> continuation.resume(url) },
+                    onError = { err -> continuation.resumeWithException(Exception(err)) }
+                )
+            } else if (activeProvider == "CLOUDFLARE_R2") {
+                com.example.api.R2SupabaseManager.uploadFileOnlyToCloudflareR2(
+                    context = context,
+                    creds = com.example.api.R2SupabaseManager.getCredentials(context),
+                    fileUri = fileUri,
+                    onProgress = {},
+                    onSuccess = { url -> continuation.resume(url) },
+                    onError = { err -> continuation.resumeWithException(Exception(err)) }
+                )
+            } else {
+                // Supabase is default
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    try {
+                        val url = com.example.api.R2SupabaseManager.uploadFileToSupabaseStorage(
+                            context = context,
+                            fileUri = fileUri,
+                            bucketName = "videos"
+                        )
+                        continuation.resume(url)
+                    } catch (e: Exception) {
+                        continuation.resumeWithException(e)
+                    }
+                }
+            }
+        }
+        
+        // 2. Obtain the final public HTTP URL by resolving the custom scheme
+        val publicUrl = com.example.service.MediaStorageServiceFactory.getService(context).resolveMediaUrl(uploadedCustomUrl)
+        
+        android.util.Log.i("AcademyViewModel", "[COVER IMAGE] Batch cover image successfully uploaded to active storage. Generated Public URL: $publicUrl")
+        return publicUrl
+    }
+
+    private suspend fun uploadBatchImageWithRetry(context: Context, fileUri: android.net.Uri, maxRetries: Int = 3): String {
+        var lastException: Exception? = null
+        for (attempt in 1..maxRetries) {
+            try {
+                return uploadBatchImage(context, fileUri)
+            } catch (e: Exception) {
+                lastException = e
+                android.util.Log.w("AcademyViewModel", "[COVER IMAGE] Upload attempt $attempt failed, retrying...", e)
+                if (attempt < maxRetries) {
+                    kotlinx.coroutines.delay(1000L * attempt)
+                }
+            }
+        }
+        throw lastException ?: Exception("Upload failed after $maxRetries attempts")
+    }
+
+    private suspend fun uploadModuleFileWithRetry(context: Context, fileUri: android.net.Uri, module: FolderModule, maxRetries: Int = 3): String {
+        var lastException: Exception? = null
+        for (attempt in 1..maxRetries) {
+            try {
+                return uploadModuleFile(context, fileUri, module)
+            } catch (e: Exception) {
+                lastException = e
+                android.util.Log.w("AcademyViewModel", "[MODULE FILE] Upload attempt $attempt failed, retrying...", e)
+                if (attempt < maxRetries) {
+                    kotlinx.coroutines.delay(1000L * attempt)
+                }
+            }
+        }
+        throw lastException ?: Exception("Module file upload failed after $maxRetries attempts")
+    }
+
+    private suspend fun uploadModuleFile(context: Context, fileUri: android.net.Uri, module: FolderModule): String {
+        android.util.Log.d("AcademyViewModel", "[MODULE FILE] Starting upload for ${module.titleName}. Local URI: $fileUri")
+        
+        val activeProvider = com.example.service.MediaStorageServiceFactory.getService(context).getStorageType()
+        val folderPath = when (module) {
+            FolderModule.SYLLABUS -> "course-syllabus"
+            FolderModule.PREVIOUS_PAPERS -> "previous-papers"
+            FolderModule.FREE_BOOKS -> "free-books"
+        }
+        
+        val uploadedCustomUrl = kotlin.coroutines.suspendCoroutine<String> { continuation ->
+            if (activeProvider == "BACKBLAZE_B2") {
+                com.example.api.BackblazeB2Manager.uploadFileOnlyToBackblazeB2(
+                    context = context,
+                    creds = com.example.api.BackblazeB2Manager.getCredentials(context),
+                    fileUri = fileUri,
+                    onProgress = {},
+                    onSuccess = { url -> continuation.resume(url) },
+                    onError = { err -> continuation.resumeWithException(Exception(err)) }
+                )
+            } else if (activeProvider == "CLOUDFLARE_R2") {
+                com.example.api.R2SupabaseManager.uploadFileOnlyToCloudflareR2(
+                    context = context,
+                    creds = com.example.api.R2SupabaseManager.getCredentials(context),
+                    fileUri = fileUri,
+                    onProgress = {},
+                    onSuccess = { url -> continuation.resume(url) },
+                    onError = { err -> continuation.resumeWithException(Exception(err)) }
+                )
+            } else {
+                // Supabase is default
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    try {
+                        val url = com.example.api.R2SupabaseManager.uploadFileToSupabaseStorage(
+                            context = context,
+                            fileUri = fileUri,
+                            bucketName = "materials",
+                            folderPath = folderPath
+                        )
+                        continuation.resume(url)
+                    } catch (e: Exception) {
+                        continuation.resumeWithException(e)
+                    }
+                }
+            }
+        }
+        
+        val publicUrl = com.example.service.MediaStorageServiceFactory.getService(context).resolveMediaUrl(uploadedCustomUrl)
+        android.util.Log.i("AcademyViewModel", "[MODULE FILE] Upload successfully completed. Generated Public URL: $publicUrl")
+        return publicUrl
+    }
+
+    // === Folder Management System State & Functions ===
+
+    val syllabusFolders: StateFlow<List<FolderItem>> = repository.allSyllabusFolders
+        .map { list -> list.map { it.toFolderItem() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val syllabusFiles: StateFlow<List<FileItem>> = repository.allSyllabusFiles
+        .map { list -> list.map { it.toFileItem() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val previousPaperFolders: StateFlow<List<FolderItem>> = repository.allPreviousPaperFolders
+        .map { list -> list.map { it.toFolderItem() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val previousPaperFiles: StateFlow<List<FileItem>> = repository.allPreviousPaperFiles
+        .map { list -> list.map { it.toFileItem() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val freeBookFolders: StateFlow<List<FolderItem>> = repository.allFreeBookFolders
+        .map { list -> list.map { it.toFolderItem() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val freeBookFiles: StateFlow<List<FileItem>> = repository.allFreeBookFiles
+        .map { list -> list.map { it.toFileItem() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun refreshFolderModule(module: FolderModule) {
+        viewModelScope.launch {
+            try {
+                repository.syncFoldersAndFilesFromSupabase(module)
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "Failed to refresh ${module.titleName}: ${e.message}")
+            }
+        }
+    }
+
+    fun createFolder(
+        module: FolderModule,
+        parentId: Long?,
+        name: String,
+        imageUri: Uri?,
+        context: Context,
+        onComplete: (Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                var imageUrl = ""
+                if (imageUri != null) {
+                    imageUrl = try {
+                        uploadBatchImageWithRetry(context, imageUri)
+                    } catch (e: Exception) {
+                        ""
+                    }
+                }
+                val newItem = FolderItem(
+                    parentId = parentId,
+                    name = name.trim(),
+                    imageUrl = imageUrl
+                )
+                val success = repository.insertFolder(module, newItem)
+                onComplete(success)
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "createFolder error", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    fun updateFolderCoverImage(
+        module: FolderModule,
+        folder: FolderItem,
+        imageUri: Uri,
+        context: Context,
+        onComplete: (Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val imageUrl = uploadModuleFileWithRetry(context, imageUri, module)
+                val updated = folder.copy(imageUrl = imageUrl)
+                val success = repository.updateFolder(module, updated)
+                onComplete(success)
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "updateFolderCoverImage error", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    fun renameFolder(
+        module: FolderModule,
+        folder: FolderItem,
+        newName: String,
+        onComplete: (Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val updated = folder.copy(name = newName.trim())
+                val success = repository.updateFolder(module, updated)
+                onComplete(success)
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "renameFolder error", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    fun moveFolder(
+        module: FolderModule,
+        folder: FolderItem,
+        newParentId: Long?,
+        onComplete: (Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val updated = folder.copy(parentId = newParentId)
+                val success = repository.updateFolder(module, updated)
+                onComplete(success)
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "moveFolder error", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    fun deleteFolder(
+        module: FolderModule,
+        folderId: Long,
+        onComplete: (Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val success = repository.deleteFolder(module, folderId)
+                onComplete(success)
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "deleteFolder error", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    fun uploadFilesToFolder(
+        module: FolderModule,
+        folderId: Long,
+        fileUris: List<Uri>,
+        context: Context,
+        onProgress: (currentIndex: Int, totalCount: Int, fileProgress: Float) -> Unit,
+        onComplete: (Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val total = fileUris.size
+                var overallSuccess = true
+
+                for ((index, uri) in fileUris.withIndex()) {
+                    onProgress(index + 1, total, 0.1f)
+                    val mimeType = context.contentResolver.getType(uri) ?: ""
+                    val fileType = if (mimeType.contains("image", ignoreCase = true)) "image" else "pdf"
+                    
+                    val fileName = try {
+                        var name = "File_${System.currentTimeMillis()}"
+                        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                            val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                            if (nameIdx != -1 && cursor.moveToFirst()) {
+                                name = cursor.getString(nameIdx)
+                            }
+                        }
+                        name
+                    } catch (e: Exception) {
+                        "File_${System.currentTimeMillis()}.${if (fileType == "image") "jpg" else "pdf"}"
+                    }
+
+                    val fileSize = try {
+                        var sizeBytes = 0L
+                        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                            val sizeIdx = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                            if (sizeIdx != -1 && cursor.moveToFirst()) {
+                                sizeBytes = cursor.getLong(sizeIdx)
+                            }
+                        }
+                        if (sizeBytes > 0) String.format("%.1f MB", sizeBytes / (1024f * 1024f)) else ""
+                    } catch (e: Exception) {
+                        ""
+                    }
+
+                    onProgress(index + 1, total, 0.4f)
+                    val uploadedUrl = try {
+                        uploadModuleFileWithRetry(context, uri, module)
+                    } catch (e: Exception) {
+                        ""
+                    }
+
+                    onProgress(index + 1, total, 0.8f)
+                    if (uploadedUrl.isNotBlank()) {
+                        val fileItem = FileItem(
+                            folderId = folderId,
+                            fileName = fileName,
+                            fileType = fileType,
+                            storageUrl = uploadedUrl,
+                            fileSize = fileSize
+                        )
+                        repository.insertFile(module, fileItem)
+                    } else {
+                        overallSuccess = false
+                    }
+                    onProgress(index + 1, total, 1.0f)
+                }
+
+                onComplete(overallSuccess)
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "uploadFilesToFolder error", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    fun renameFile(
+        module: FolderModule,
+        file: FileItem,
+        newName: String,
+        onComplete: (Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val updated = file.copy(fileName = newName.trim())
+                val success = repository.updateFile(module, updated)
+                onComplete(success)
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "renameFile error", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    fun moveFile(
+        module: FolderModule,
+        file: FileItem,
+        newFolderId: Long,
+        onComplete: (Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val updated = file.copy(folderId = newFolderId)
+                val success = repository.updateFile(module, updated)
+                onComplete(success)
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "moveFile error", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    fun replaceFile(
+        module: FolderModule,
+        file: FileItem,
+        newUri: Uri,
+        context: Context,
+        onComplete: (Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val uploadedUrl = uploadModuleFileWithRetry(context, newUri, module)
+                val updated = file.copy(storageUrl = uploadedUrl)
+                val success = repository.updateFile(module, updated)
+                onComplete(success)
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "replaceFile error", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    fun deleteFile(
+        module: FolderModule,
+        fileId: Long,
+        onComplete: (Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val success = repository.deleteFile(module, fileId)
+                onComplete(success)
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "deleteFile error", e)
+                onComplete(false)
+            }
         }
     }
 }
