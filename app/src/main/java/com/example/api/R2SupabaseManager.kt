@@ -2517,8 +2517,34 @@ object R2SupabaseManager {
             Log.e(TAG, "Bucket check/creation failed: ${e.message}")
         }
 
-        val (originalName, size) = getFileInfo(context, fileUri)
-        val mimeType = context.contentResolver.getType(fileUri) ?: "image/jpeg"
+        var (originalName, size) = getFileInfo(context, fileUri)
+        if (size <= 0) {
+            try {
+                context.contentResolver.openInputStream(fileUri)?.use { stream ->
+                    val bytes = stream.readBytes()
+                    size = bytes.size.toLong()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to resolve stream size", e)
+            }
+        }
+
+        val rawMimeType = context.contentResolver.getType(fileUri)
+        val mimeType = when {
+            !rawMimeType.isNullOrBlank() && (rawMimeType.startsWith("image/") || rawMimeType.startsWith("video/") || rawMimeType == "application/pdf") -> rawMimeType
+            else -> {
+                val ext = originalName.substringAfterLast(".", "").lowercase()
+                when (ext) {
+                    "png" -> "image/png"
+                    "webp" -> "image/webp"
+                    "jpg", "jpeg" -> "image/jpeg"
+                    "gif" -> "image/gif"
+                    "pdf" -> "application/pdf"
+                    "mp4" -> "video/mp4"
+                    else -> "image/jpeg"
+                }
+            }
+        }
         
         Log.d(TAG, "=== BANNER/VIDEO UPLOAD DEBUG ===")
         Log.d(TAG, "Selected Image/Video: $fileUri")
@@ -2530,13 +2556,21 @@ object R2SupabaseManager {
             mimeType.contains("png") -> "png"
             mimeType.contains("jpeg") || mimeType.contains("jpg") -> "jpg"
             mimeType.contains("webp") -> "webp"
+            mimeType.contains("gif") -> "gif"
             mimeType.contains("pdf") -> "pdf"
             mimeType.contains("mp4") -> "mp4"
-            else -> originalName.substringAfterLast(".", "jpg")
+            else -> {
+                val ext = originalName.substringAfterLast(".", "jpg").lowercase()
+                if (ext.length in 2..5 && ext.all { it.isLetterOrDigit() }) ext else "jpg"
+            }
         }
         
-        val prefix = if (bucketName == "videos") "lms" else "banner"
-        val baseName = "${prefix}_${System.currentTimeMillis()}.$extension"
+        val baseName = if (bucketName == "study-websites") {
+            "study_website_${java.util.UUID.randomUUID()}.$extension"
+        } else {
+            val prefix = if (bucketName == "videos") "lms" else "banner"
+            "${prefix}_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(8)}.$extension"
+        }
         val uniqueName = if (folderPath.isNotEmpty()) "${folderPath.trimEnd('/')}/$baseName" else baseName
 
         val supabaseUrl = creds.cleanBaseUrl
@@ -2565,7 +2599,7 @@ object R2SupabaseManager {
                 if (!response.isSuccessful) {
                     val errBody = response.body?.string() ?: ""
                     Log.e(TAG, "TUS Create Failed (Code ${response.code}): $errBody")
-                    throw Exception("Supabase TUS create error (Code ${response.code}): $errBody")
+                    throw Exception(formatSupabaseStorageError(response.code, errBody, bucketName))
                 }
                 uploadUrl = response.header("Location") ?: throw Exception("No Location header in TUS response")
                 if (uploadUrl.startsWith("/")) {
@@ -2673,18 +2707,106 @@ object R2SupabaseManager {
                 .post(requestBody)
                 .addHeader("Authorization", "Bearer ${creds.supabaseAnonKey}")
                 .addHeader("apikey", creds.supabaseAnonKey)
+                .addHeader("x-upsert", "true")
                 .build()
 
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     val errBody = response.body?.string() ?: ""
                     Log.e(TAG, "Upload Failed (Server Code ${response.code}): $errBody")
-                    throw Exception("Supabase storage error (Code ${response.code}): $errBody")
+                    throw Exception(formatSupabaseStorageError(response.code, errBody, bucketName))
                 }
                 Log.d(TAG, "Upload Success")
                 return@withContext publicUrl
             }
         }
+    }
+
+    suspend fun deleteFileFromSupabaseStorage(
+        context: Context,
+        publicUrl: String,
+        bucketName: String = "materials"
+    ): Boolean = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val creds = getCredentials(context)
+        if (!creds.isValid()) return@withContext false
+        
+        try {
+            val targetMarker = "/storage/v1/object/public/$bucketName/"
+            val markerIndex = publicUrl.indexOf(targetMarker)
+            if (markerIndex == -1) {
+                Log.e(TAG, "Cannot parse relative path from URL: $publicUrl")
+                return@withContext false
+            }
+            val relativePath = publicUrl.substring(markerIndex + targetMarker.length)
+            Log.d(TAG, "Deleting from Supabase storage: bucket=$bucketName, path=$relativePath")
+            
+            val supabaseUrl = creds.cleanBaseUrl
+            val deleteUrl = "$supabaseUrl/storage/v1/object/$bucketName"
+            
+            val json = JSONObject().apply {
+                val arr = org.json.JSONArray().apply {
+                    put(relativePath)
+                }
+                put("prefixes", arr)
+            }
+            
+            val requestBody = json.toString().toRequestBody("application/json".toMediaTypeOrNull())
+            val request = Request.Builder()
+                .url(deleteUrl)
+                .delete(requestBody)
+                .addHeader("Authorization", "Bearer ${creds.supabaseAnonKey}")
+                .addHeader("apikey", creds.supabaseAnonKey)
+                .build()
+                
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Log.d(TAG, "File deleted successfully from Supabase storage: $relativePath")
+                    true
+                } else {
+                    Log.e(TAG, "Failed to delete file from Supabase storage (Code ${response.code}): ${response.body?.string()}")
+                    false
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error deleting file from Supabase storage", e)
+            false
+        }
+    }
+
+    private fun formatSupabaseStorageError(code: Int, responseBody: String, bucketName: String = ""): String {
+        try {
+            val bodyTrim = responseBody.trim()
+            if (bodyTrim.startsWith("{")) {
+                val json = org.json.JSONObject(bodyTrim)
+                val message = json.optString("message").ifBlank { json.optString("msg") }
+                val error = json.optString("error")
+                val errorCode = json.optString("code")
+                
+                val details = mutableListOf<String>()
+                if (message.isNotBlank()) details.add("Message: $message")
+                if (error.isNotBlank()) details.add("Error: $error")
+                if (errorCode.isNotBlank()) details.add("Code: $errorCode")
+                
+                val rec = when {
+                    message.contains("row-level security", ignoreCase = true) || message.contains("violates row-level security", ignoreCase = true) -> {
+                        "Recommendation: Row-Level Security (RLS) policies are blocking this upload. Please enable/add RLS policies on the 'storage.objects' table in your Supabase Dashboard to allow public or authenticated INSERT/SELECT on bucket '${if(bucketName.isNotBlank()) bucketName else "study-websites"}'."
+                    }
+                    message.contains("bucket not found", ignoreCase = true) || error.contains("NoSuchBucket", ignoreCase = true) || errorCode.contains("NoSuchBucket", ignoreCase = true) -> {
+                        "Recommendation: The storage bucket '${if(bucketName.isNotBlank()) bucketName else "study-websites"}' does not exist on your Supabase project. Please log into your Supabase Dashboard -> Storage and create a PUBLIC bucket named '${if(bucketName.isNotBlank()) bucketName else "study-websites"}'."
+                    }
+                    message.contains("mime type", ignoreCase = true) || errorCode.contains("InvalidMimeType", ignoreCase = true) -> {
+                        "Recommendation: The file's MIME type is restricted/not allowed in this bucket's configurations."
+                    }
+                    else -> null
+                }
+                if (rec != null) details.add(rec)
+                
+                return "Supabase Storage Error (HTTP $code):\n" + details.joinToString("\n")
+            }
+        } catch (e: Exception) {
+            // fallback
+        }
+        return "Supabase Storage Error (HTTP $code): $responseBody"
     }
 
     private suspend fun ensureBucketExists(creds: Credentials, bucketName: String) {
@@ -2709,7 +2831,7 @@ object R2SupabaseManager {
         if (!exists) {
             Log.d(TAG, "Bucket $bucketName not found, attempting to create...")
             val createUrl = "$supabaseUrl/storage/v1/bucket"
-            val jsonBody = """{"id": "$bucketName", "name": "$bucketName", "public": true, "file_size_limit": 53687091200}"""
+            val jsonBody = """{"id": "$bucketName", "name": "$bucketName", "public": true}"""
             val createRequest = Request.Builder()
                 .url(createUrl)
                 .post(jsonBody.toRequestBody("application/json".toMediaTypeOrNull()))
@@ -2727,9 +2849,9 @@ object R2SupabaseManager {
                 }
             }
         } else {
-            // Update existing bucket to ensure it has large size limit
+            // Update existing bucket to ensure it is public
             val updateUrl = "$supabaseUrl/storage/v1/bucket/$bucketName"
-            val jsonBody = """{"public": true, "file_size_limit": 53687091200}"""
+            val jsonBody = """{"public": true}"""
             val updateRequest = Request.Builder()
                 .url(updateUrl)
                 .put(jsonBody.toRequestBody("application/json".toMediaTypeOrNull()))

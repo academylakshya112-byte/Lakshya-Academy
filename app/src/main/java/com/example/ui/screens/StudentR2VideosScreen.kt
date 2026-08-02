@@ -2758,13 +2758,23 @@ fun InAppPdfViewer(pdfUrl: String, title: String, onBack: () -> Unit) {
                 AndroidView(
                     factory = { ctx ->
                         android.webkit.WebView(ctx).apply {
-                            settings.javaScriptEnabled = true
-                            settings.allowFileAccess = true
-                            settings.builtInZoomControls = true
-                            settings.displayZoomControls = false
-                            settings.useWideViewPort = true
-                            settings.loadWithOverviewMode = true
+                            setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                            android.webkit.CookieManager.getInstance().setAcceptCookie(true)
+                            android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                            settings.apply {
+                                javaScriptEnabled = true
+                                domStorageEnabled = true
+                                allowFileAccess = true
+                                builtInZoomControls = true
+                                displayZoomControls = false
+                                useWideViewPort = true
+                                loadWithOverviewMode = true
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                                    mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                }
+                            }
                             webViewClient = android.webkit.WebViewClient()
+                            webChromeClient = android.webkit.WebChromeClient()
                             loadUrl(googleDocsUrl)
                         }
                     },

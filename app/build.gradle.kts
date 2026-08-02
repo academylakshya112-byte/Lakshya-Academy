@@ -82,7 +82,9 @@ val varsToSync = listOf(
     "B2_ENDPOINT",
     "B2_BUCKET_NAME",
     "B2_APPLICATION_KEY_ID",
-    "B2_APPLICATION_KEY"
+    "B2_APPLICATION_KEY",
+    "GOOGLE_WEB_CLIENT_ID",
+    "YOUTUBE_API_KEY"
 )
 
 val resolvedVars = mutableMapOf<String, String>()
@@ -104,6 +106,8 @@ varsToSync.forEach { key ->
         "B2_BUCKET_NAME" -> "lakshyaacademy"
         "B2_APPLICATION_KEY_ID" -> "0051b27e56190ee0000000002"
         "B2_APPLICATION_KEY" -> "K005uux3V6ogoTTUzRJ3eyPN2bwdde4"
+        "GOOGLE_WEB_CLIENT_ID" -> "YOUR_GOOGLE_WEB_CLIENT_ID"
+        "YOUTUBE_API_KEY" -> "YOUR_YOUTUBE_API_KEY"
         else -> ""
     }
 }

@@ -19,6 +19,10 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     installSplashScreen()
+    window.setFlags(
+      android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+      android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
+    )
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
     setContent {

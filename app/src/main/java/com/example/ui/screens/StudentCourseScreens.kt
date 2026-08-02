@@ -37,7 +37,8 @@ import com.example.ui.viewmodel.AcademyViewModel
 fun StudentHomeDashboard(
     viewModel: AcademyViewModel,
     onTabSelect: (String) -> Unit,
-    onPlayCourse: (CourseEntity) -> Unit
+    onPlayCourse: (CourseEntity) -> Unit,
+    onOpenWebsite: (String) -> Unit = {}
 ) {
     val enrollments by viewModel.allEnrollments.collectAsStateWithLifecycle()
     val courses by viewModel.allCourses.collectAsStateWithLifecycle()
@@ -45,15 +46,26 @@ fun StudentHomeDashboard(
     val studentName = viewModel.currentUser?.name ?: "Learner"
     val userEmail = viewModel.currentUser?.email ?: ""
 
+    var showCommunityPopup by remember { mutableStateOf(true) }
+    val popupConfig = viewModel.communityPopupConfig
+
     var supabaseVideos by remember { mutableStateOf<List<SupabaseVideo>>(emptyList()) }
     val context = LocalContext.current
     LaunchedEffect(Unit) {
         viewModel.syncFromRemote()
+        viewModel.fetchCommunityPopup()
         R2SupabaseManager.fetchVideos(context) { list, error ->
             if (error == null && list != null) {
                 supabaseVideos = list
             }
         }
+    }
+
+    if (showCommunityPopup && popupConfig.enabled) {
+        CommunityPopupDialog(
+            config = popupConfig,
+            onDismiss = { showCommunityPopup = false }
+        )
     }
 
     val activeAndSortedBanners = remember(banners) {
@@ -118,7 +130,8 @@ fun StudentHomeDashboard(
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
         item {
-            DashboardBrandHeader(studentName = studentName)
+            val userPhotoUri = viewModel.currentUser?.photoUri ?: ""
+            DashboardBrandHeader(studentName = studentName, photoUri = userPhotoUri)
             Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = "Official Announcements (महत्वपूर्ण सूचना पट्ट)",
@@ -430,6 +443,244 @@ fun StudentMyCourses(
                                     Text("Let's Study (पढ़ाई चालू करें)")
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fun openExternalUrl(context: android.content.Context, url: String) {
+    if (url.isBlank()) {
+        Toast.makeText(context, "Link is empty", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val cleanUrl = if (!url.startsWith("http://") && !url.startsWith("https://")) {
+        "https://$url"
+    } else {
+        url
+    }
+    try {
+        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(cleanUrl))
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        Toast.makeText(context, "Could not open link: ${e.message}", Toast.LENGTH_SHORT).show()
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CommunityPopupDialog(
+    config: com.example.data.CommunityPopupEntity,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.70f))
+                .clickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = true,
+                enter = androidx.compose.animation.fadeIn(animationSpec = androidx.compose.animation.core.tween(300)) + androidx.compose.animation.scaleIn(initialScale = 0.85f, animationSpec = androidx.compose.animation.core.tween(300)),
+                exit = androidx.compose.animation.fadeOut(animationSpec = androidx.compose.animation.core.tween(200)) + androidx.compose.animation.scaleOut(targetScale = 0.85f, animationSpec = androidx.compose.animation.core.tween(200))
+            ) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth(0.90f)
+                        .widthIn(max = 420.dp)
+                        .padding(16.dp)
+                        .clickable(enabled = false, onClick = {}),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+                ) {
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            // Top Image
+                            if (config.imageUrl.isNotBlank()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(180.dp)
+                                        .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                ) {
+                                    AsyncImage(
+                                        model = config.imageUrl,
+                                        contentDescription = "Community Banner",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                }
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(110.dp)
+                                        .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                                        .background(
+                                            androidx.compose.ui.graphics.Brush.verticalGradient(
+                                                colors = listOf(
+                                                    Color(0xFF1E293B),
+                                                    Color(0xFF0F172A)
+                                                )
+                                            )
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Groups,
+                                        contentDescription = null,
+                                        tint = Color(0xFF38BDF8),
+                                        modifier = Modifier.size(52.dp)
+                                    )
+                                }
+                            }
+
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = if (config.title.isNotBlank()) config.title else "SHADOWXRAHUL",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Text(
+                                    text = if (config.description.isNotBlank()) config.description else "Join our Official Community to receive the latest updates, study materials, notices, announcements, and important information.",
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    lineHeight = 18.sp
+                                )
+
+                                Spacer(modifier = Modifier.height(20.dp))
+
+                                // 1. Green Button - Join WhatsApp Channel
+                                Button(
+                                    onClick = {
+                                        openExternalUrl(context, config.whatsappUrl)
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF25D366),
+                                        contentColor = Color.White
+                                    )
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Chat,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Join WhatsApp Channel",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                // 2. Blue Button - Join Telegram Channel
+                                Button(
+                                    onClick = {
+                                        openExternalUrl(context, config.telegramUrl)
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF0088CC),
+                                        contentColor = Color.White
+                                    )
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Send,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Join Telegram Channel",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                // 3. Gray Button - Continue to App
+                                Surface(
+                                    onClick = onDismiss,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = "Continue to App",
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 14.sp,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Close (X) button
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(8.dp)
+                                .size(36.dp)
+                                .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
                     }
                 }

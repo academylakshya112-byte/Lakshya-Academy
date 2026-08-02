@@ -13,6 +13,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
 import com.example.data.*
+import com.example.api.R2SupabaseManager
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Types
@@ -39,6 +40,7 @@ data class ActiveTestProgress(
     val questions: List<QuestionEntity>,
     var currentQuestionIndex: Int = 0,
     val selectedAnswers: MutableMap<Int, Int> = mutableStateMapOf(), // questionId -> selectedIndex (0..3)
+    val reviewedQuestions: MutableSet<Int> = mutableSetOf(), // questionId set marked for review
     var secondsRemaining: Int,
     var isSubmitted: Boolean = false,
     val testScore: TestScoreEntity? = null
@@ -57,7 +59,7 @@ fun extractYoutubeVideoId(input: String): String {
     if (trimmed.length == 11 && !trimmed.contains("/") && !trimmed.contains("?") && !trimmed.contains(".") && !trimmed.contains(":")) {
         return trimmed
     }
-    val pattern = "(?:youtube\\.com\\/(?:[^\\/]+\\/.+\\/|(?:v|e(?:mbed)?|live)\\/" +
+    val pattern = "(?:youtube\\.com\\/(?:[^\\/]+\\/.+\\/|(?:v|e(?:mbed)?|live|shorts)\\/" +
             "|.*[?&]v=)|youtu\\.be\\/)([^\"&?\\/\\s]{11})"
     val matcher = java.util.regex.Pattern.compile(pattern).matcher(trimmed)
     if (matcher.find()) {
@@ -74,62 +76,126 @@ suspend fun fetchYouTubeMetadata(urlOrId: String): YouTubeMetadata = kotlinx.cor
     var isLive = true
 
     if (videoId.isNotBlank()) {
-        // 1. Fetch title and thumbnail via YouTube oEmbed
-        try {
-            val oembedUrl = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$videoId&format=json"
-            val conn = (java.net.URL(oembedUrl).openConnection() as java.net.HttpURLConnection).apply {
-                connectTimeout = 4000
-                readTimeout = 4000
-                requestMethod = "GET"
-                setRequestProperty("User-Agent", "Mozilla/5.0")
-            }
-            if (conn.responseCode == 200) {
-                val jsonStr = conn.inputStream.bufferedReader().use { it.readText() }
-                val json = org.json.JSONObject(jsonStr)
-                if (json.has("title") && json.getString("title").isNotBlank()) {
-                    fetchedTitle = json.getString("title")
+        val apiKey = BuildConfig.YOUTUBE_API_KEY
+        var usedApi = false
+        if (apiKey.isNotBlank() && apiKey != "YOUR_YOUTUBE_API_KEY" && !apiKey.startsWith("YOUR_")) {
+            try {
+                val url = "https://www.googleapis.com/youtube/v3/videos?part=snippet,liveStreamingDetails&id=$videoId&key=$apiKey"
+                val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 5000
+                    readTimeout = 5000
+                    requestMethod = "GET"
                 }
-                if (json.has("thumbnail_url") && json.getString("thumbnail_url").isNotBlank()) {
-                    thumbnailUrl = json.getString("thumbnail_url")
+                if (conn.responseCode == 200) {
+                    val jsonStr = conn.inputStream.bufferedReader().use { it.readText() }
+                    val json = org.json.JSONObject(jsonStr)
+                    val items = json.optJSONArray("items")
+                    if (items != null && items.length() > 0) {
+                        val item = items.getJSONObject(0)
+                        val snippet = item.optJSONObject("snippet")
+                        if (snippet != null) {
+                            if (snippet.has("title")) {
+                                fetchedTitle = snippet.getString("title")
+                            }
+                            val thumbnails = snippet.optJSONObject("thumbnails")
+                            if (thumbnails != null) {
+                                val sizes = listOf("maxres", "standard", "high", "medium", "default")
+                                for (size in sizes) {
+                                    val thumbObj = thumbnails.optJSONObject(size)
+                                    if (thumbObj != null && thumbObj.has("url")) {
+                                        thumbnailUrl = thumbObj.getString("url")
+                                        break
+                                    }
+                                }
+                            }
+                            val liveBroadcastContent = snippet.optString("liveBroadcastContent", "none")
+                            when (liveBroadcastContent) {
+                                "live" -> {
+                                    status = "Live"
+                                    isLive = true
+                                }
+                                "upcoming" -> {
+                                    status = "Upcoming"
+                                    isLive = false
+                                }
+                                "none" -> {
+                                    status = "Ended"
+                                    isLive = false
+                                }
+                                else -> {
+                                    status = "Live"
+                                    isLive = true
+                                }
+                            }
+                            usedApi = true
+                        }
+                    }
+                } else {
+                    Log.e("AcademyViewModel", "YouTube API returned response code: ${conn.responseCode}")
                 }
+            } catch (e: Exception) {
+                Log.e("AcademyViewModel", "YouTube API call failed, falling back to oEmbed/Scraping", e)
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
 
-        // 2. Scan watch HTML for live / upcoming / ended status
-        try {
-            val watchUrl = "https://www.youtube.com/watch?v=$videoId"
-            val conn = (java.net.URL(watchUrl).openConnection() as java.net.HttpURLConnection).apply {
-                connectTimeout = 4000
-                readTimeout = 4000
-                requestMethod = "GET"
-                setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            }
-            if (conn.responseCode == 200) {
-                val html = conn.inputStream.bufferedReader().use { reader ->
-                    val sb = StringBuilder()
-                    var line: String?
-                    var bytesRead = 0
-                    while (reader.readLine().also { line = it } != null && bytesRead < 250000) {
-                        sb.append(line)
-                        bytesRead += line?.length ?: 0
+        if (!usedApi) {
+            // 1. Fetch title and thumbnail via YouTube oEmbed
+            try {
+                val oembedUrl = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$videoId&format=json"
+                val conn = (java.net.URL(oembedUrl).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 4000
+                    readTimeout = 4000
+                    requestMethod = "GET"
+                    setRequestProperty("User-Agent", "Mozilla/5.0")
+                }
+                if (conn.responseCode == 200) {
+                    val jsonStr = conn.inputStream.bufferedReader().use { it.readText() }
+                    val json = org.json.JSONObject(jsonStr)
+                    if (json.has("title") && json.getString("title").isNotBlank()) {
+                        fetchedTitle = json.getString("title")
                     }
-                    sb.toString()
+                    if (json.has("thumbnail_url") && json.getString("thumbnail_url").isNotBlank()) {
+                        thumbnailUrl = json.getString("thumbnail_url")
+                    }
                 }
-                if (html.contains("\"isLive\":true") || html.contains("\"isLiveNow\":true") || html.contains("\"style\":\"LIVE\"") || html.contains("isLiveStream\":true") || html.contains("LIVE_NOW")) {
-                    status = "Live"
-                    isLive = true
-                } else if (html.contains("\"isUpcoming\":true") || html.contains("upcomingEventData") || html.contains("\"UPCOMING\"") || html.contains("scheduledStartTime")) {
-                    status = "Upcoming"
-                    isLive = false
-                } else if (html.contains("\"isLiveContent\":true")) {
-                    status = "Ended"
-                    isLive = false
-                }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+
+            // 2. Scan watch HTML for live / upcoming / ended status
+            try {
+                val watchUrl = "https://www.youtube.com/watch?v=$videoId"
+                val conn = (java.net.URL(watchUrl).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 4000
+                    readTimeout = 4000
+                    requestMethod = "GET"
+                    setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                }
+                if (conn.responseCode == 200) {
+                    val html = conn.inputStream.bufferedReader().use { reader ->
+                        val sb = StringBuilder()
+                        var line: String?
+                        var bytesRead = 0
+                        while (reader.readLine().also { line = it } != null && bytesRead < 250000) {
+                            sb.append(line)
+                            bytesRead += line?.length ?: 0
+                        }
+                        sb.toString()
+                    }
+                    if (html.contains("\"isLive\":true") || html.contains("\"isLiveNow\":true") || html.contains("\"style\":\"LIVE\"") || html.contains("isLiveStream\":true") || html.contains("LIVE_NOW")) {
+                        status = "Live"
+                        isLive = true
+                    } else if (html.contains("\"isUpcoming\":true") || html.contains("upcomingEventData") || html.contains("\"UPCOMING\"") || html.contains("scheduledStartTime")) {
+                        status = "Upcoming"
+                        isLive = false
+                    } else if (html.contains("\"isLiveContent\":true")) {
+                        status = "Ended"
+                        isLive = false
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 
@@ -337,6 +403,9 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
     val allBanners: StateFlow<List<BannerEntity>> = repository.allBanners
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val allStudyWebsites: StateFlow<List<StudyWebsiteEntity>> = repository.allStudyWebsites
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val allLiveClasses: StateFlow<List<LiveClassEntity>> = repository.allLiveClasses
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -394,14 +463,22 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
     var activeLiveIsScheduled by mutableStateOf(true)
 
     init {
-        // Start Weekly Mock Test Generator Scheduler
+        // Start Weekly Mock Test Generator Scheduler (Disabled as requested to permanently remove mock tests)
+        /*
         try {
             com.example.service.WeeklyMockTestGenerator.startScheduler(application, repository)
         } catch (e: Exception) {
             android.util.Log.e("AcademyViewModel", "Error starting WeeklyMockTestGenerator: ${e.message}")
         }
+        */
 
         viewModelScope.launch {
+            try {
+                repository.deleteAllTests()
+                repository.deleteAllQuestions()
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "Error clearing tests/questions on init: ${e.message}")
+            }
             repository.syncAllFromRemote()
             checkForUpdates()
         }
@@ -450,6 +527,12 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 observeMaterials()
+                try {
+                    repository.deleteAllTests()
+                    repository.deleteAllQuestions()
+                } catch (e: Exception) {
+                    android.util.Log.e("AcademyViewModel", "Error clearing tests in startup: ${e.message}")
+                }
                 // Fetch latest data from backend directly
                 repository.syncAllFromRemote()
             } catch (e: Exception) {
@@ -462,6 +545,7 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 repository.syncAllFromRemote()
+                fetchCommunityPopup()
             } catch (e: Exception) {
                 android.util.Log.e("AcademyViewModel", "Manual sync failed", e)
             }
@@ -1415,6 +1499,325 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    // --- Supabase Production-Ready Authentication System ---
+    var isAuthLoading by mutableStateOf(false)
+    var authSuccessMessage by mutableStateOf<String?>(null)
+
+    suspend fun uploadProfilePhoto(context: Context, imageUri: Uri): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            com.example.api.R2SupabaseManager.uploadFileToSupabaseStorage(
+                context = context,
+                fileUri = imageUri,
+                bucketName = "avatars",
+                folderPath = "profiles"
+            )
+        } catch (e: Exception) {
+            Log.e("AcademyViewModel", "Profile photo upload to avatars bucket failed: ${e.message}, trying materials bucket...", e)
+            com.example.api.R2SupabaseManager.uploadFileToSupabaseStorage(
+                context = context,
+                fileUri = imageUri,
+                bucketName = "materials",
+                folderPath = "profile_photos"
+            )
+        }
+    }
+
+    fun signUpWithEmailAndPassword(email: String, password: String, confirmPassword: String, name: String, photoUrl: String = "") {
+        viewModelScope.launch {
+            authError = null
+            authSuccessMessage = null
+            isAuthLoading = true
+
+            if (!checkInternetStatus()) {
+                authError = "No Internet Connection! Please connect to the internet."
+                isAuthLoading = false
+                return@launch
+            }
+
+            if (name.isBlank()) {
+                authError = "Name field cannot be blank."
+                isAuthLoading = false
+                return@launch
+            }
+
+            if (email.isBlank() || !android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+                authError = "Please enter a valid email address."
+                isAuthLoading = false
+                return@launch
+            }
+
+            if (password.length < 8) {
+                authError = "Password must be at least 8 characters long."
+                isAuthLoading = false
+                return@launch
+            }
+
+            if (password != confirmPassword) {
+                authError = "Password and Confirm Password must match."
+                isAuthLoading = false
+                return@launch
+            }
+
+            try {
+                val metadata = mapOf("full_name" to name)
+                val response = repository.signUpWithEmail(email, password, metadata)
+                val moshiInstance = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+
+                if (response.isSuccessful) {
+                    val json = response.body()?.string() ?: ""
+                    val signupResponse = try {
+                        moshiInstance.adapter(SupabaseSignupResponse::class.java).fromJson(json)
+                    } catch (e: Exception) {
+                        null
+                    }
+
+                    val uuid = signupResponse?.id ?: signupResponse?.user?.id
+                    if (uuid != null) {
+                        // Successfully signed up! Now automatically create a profile in the profiles table.
+                        val now = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.getDefault()).format(java.util.Date())
+                        
+                        // We do not make anyone admin automatically (per instructions: "Do NOT make anyone admin automatically. Do NOT use first-login-is-admin logic.")
+                        val profile = ProfileEntity(
+                            id = uuid,
+                            name = name,
+                            email = email,
+                            phone = "",
+                            photoUrl = photoUrl,
+                            role = "student",
+                            createdAt = now,
+                            lastLogin = now,
+                            status = "active"
+                        )
+
+                        val inserted = repository.insertProfile(profile)
+                        if (!inserted) {
+                            Log.e("AcademyViewModel", "Failed to create user profile in profiles table.")
+                        }
+
+                        // Map to local representation and login
+                        val appUser = AppUser(
+                            email = email,
+                            name = name,
+                            role = "STUDENT",
+                            avatarEmoji = "🎓",
+                            mobile = "",
+                            photoUri = photoUrl
+                        )
+
+                        // Save session in SharedPreferences
+                        prefs.edit()
+                            .putString("logged_in_user_email", appUser.email)
+                            .putString("logged_in_user_name", appUser.name)
+                            .putString("logged_in_user_role", appUser.role)
+                            .putString("logged_in_user_avatar", appUser.avatarEmoji)
+                            .putString("logged_in_user_mobile", appUser.mobile)
+                            .putString("logged_in_user_photo_uri", appUser.photoUri)
+                            .putString("logged_in_user_uuid", uuid)
+                            .apply()
+
+                        currentUser = appUser
+                        authSuccessMessage = "Account created successfully!"
+                    } else {
+                        // Signup successful, but needs confirmation or returned unexpected structure
+                        authSuccessMessage = "Signup successful! Please check your email for a confirmation link."
+                    }
+                } else {
+                    val errJson = response.errorBody()?.string() ?: ""
+                    val errObj = try {
+                        moshiInstance.adapter(SupabaseAuthError::class.java).fromJson(errJson)
+                    } catch (e: Exception) {
+                        null
+                    }
+                    val errMsg = errObj?.errorDescription ?: errObj?.msg ?: errObj?.message ?: ""
+                    
+                    if (errMsg.contains("already registered", ignoreCase = true) || errMsg.contains("already exists", ignoreCase = true)) {
+                        authError = "Email already exists. This email is already registered."
+                    } else if (errMsg.contains("weak", ignoreCase = true)) {
+                        authError = "Weak password. Password should be stronger."
+                    } else if (response.code() >= 500) {
+                        authError = "Server unavailable. Please try again later."
+                    } else {
+                        authError = errMsg.ifBlank { "Signup failed: ${response.message()}" }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("AcademyViewModel", "signUpWithEmailAndPassword error", e)
+                authError = "An unknown error occurred during signup: ${e.localizedMessage ?: e.message}"
+            } finally {
+                isAuthLoading = false
+            }
+        }
+    }
+
+    fun signInWithEmailAndPassword(email: String, password: String) {
+        viewModelScope.launch {
+            authError = null
+            authSuccessMessage = null
+            isAuthLoading = true
+
+            if (!checkInternetStatus()) {
+                authError = "No Internet Connection! Please connect to the internet."
+                isAuthLoading = false
+                return@launch
+            }
+
+            if (email.isBlank() || password.isBlank()) {
+                authError = "Email and Password cannot be blank."
+                isAuthLoading = false
+                return@launch
+            }
+
+            try {
+                val response = repository.signInWithPassword(email, password)
+                val moshiInstance = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+
+                if (response.isSuccessful) {
+                    val json = response.body()?.string() ?: ""
+                    val session = try {
+                        moshiInstance.adapter(SupabaseSession::class.java).fromJson(json)
+                    } catch (e: Exception) {
+                        null
+                    }
+
+                    val uuid = session?.user?.id
+                    if (uuid != null) {
+                        // Fetch profile from profiles table to check their role
+                        var profile = repository.getProfileById(uuid)
+
+                        if (profile == null) {
+                            // If profile doesn't exist for some reason, create it automatically as student
+                            val now = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.getDefault()).format(java.util.Date())
+                            profile = ProfileEntity(
+                                id = uuid,
+                                name = session.user.userMetadata?.get("full_name") as? String ?: email.substringBefore("@"),
+                                email = email,
+                                phone = "",
+                                photoUrl = "",
+                                role = "student",
+                                createdAt = now,
+                                lastLogin = now,
+                                status = "active"
+                            )
+                            repository.insertProfile(profile)
+                        } else {
+                            // Update last login
+                            val now = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.getDefault()).format(java.util.Date())
+                            repository.updateProfile(uuid, mapOf("last_login" to now))
+                        }
+
+                        // Check blocked status
+                        if (profile.status == "blocked") {
+                            authError = "Your account has been blocked by the Administrator."
+                            isAuthLoading = false
+                            return@launch
+                        }
+
+                        // Read role and open Admin Dashboard or Student Dashboard depending only on the database role
+                        val dbRole = profile.role.lowercase()
+                        val finalRole = if (dbRole == "admin") "ADMIN" else "STUDENT"
+
+                        val appUser = AppUser(
+                            email = email,
+                            name = profile.name,
+                            role = finalRole,
+                            avatarEmoji = if (finalRole == "ADMIN") "🎖️" else "🎓",
+                            mobile = profile.phone ?: "",
+                            photoUri = profile.photoUrl ?: ""
+                        )
+
+                        // Save session in SharedPreferences
+                        prefs.edit()
+                            .putString("logged_in_user_email", appUser.email)
+                            .putString("logged_in_user_name", appUser.name)
+                            .putString("logged_in_user_role", appUser.role)
+                            .putString("logged_in_user_avatar", appUser.avatarEmoji)
+                            .putString("logged_in_user_mobile", appUser.mobile)
+                            .putString("logged_in_user_photo_uri", appUser.photoUri)
+                            .putString("logged_in_user_uuid", uuid)
+                            .apply()
+
+                        currentUser = appUser
+                        authSuccessMessage = "Successfully Authenticated!"
+
+                        if (finalRole == "ADMIN") {
+                            Log.i("AcademyViewModel", "Admin logged in! Syncing remote database...")
+                            repository.syncAllFromRemote()
+                        }
+                    } else {
+                        authError = "Invalid Email or Password"
+                    }
+                } else {
+                    val errJson = response.errorBody()?.string() ?: ""
+                    val errObj = try {
+                        moshiInstance.adapter(SupabaseAuthError::class.java).fromJson(errJson)
+                    } catch (e: Exception) {
+                        null
+                    }
+                    val errMsg = errObj?.errorDescription ?: errObj?.msg ?: errObj?.message ?: ""
+
+                    if (errMsg.contains("invalid", ignoreCase = true) || errMsg.contains("credentials", ignoreCase = true)) {
+                        authError = "Invalid Email or Password"
+                    } else if (response.code() >= 500) {
+                        authError = "Server unavailable. Please try again later."
+                    } else {
+                        authError = errMsg.ifBlank { "Invalid Email or Password" }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("AcademyViewModel", "signInWithEmailAndPassword error", e)
+                authError = "Invalid Email or Password"
+            } finally {
+                isAuthLoading = false
+            }
+        }
+    }
+
+    fun forgotPassword(email: String) {
+        viewModelScope.launch {
+            authError = null
+            authSuccessMessage = null
+            isAuthLoading = true
+
+            if (!checkInternetStatus()) {
+                authError = "No Internet Connection! Please connect to the internet."
+                isAuthLoading = false
+                return@launch
+            }
+
+            if (email.isBlank() || !android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+                authError = "Please enter a valid email address."
+                isAuthLoading = false
+                return@launch
+            }
+
+            try {
+                val response = repository.recoverPassword(email)
+                if (response.isSuccessful) {
+                    authSuccessMessage = "Password reset instructions sent successfully! Please check your email inbox."
+                } else {
+                    val errJson = response.errorBody()?.string() ?: ""
+                    val moshiInstance = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+                    val errObj = try {
+                        moshiInstance.adapter(SupabaseAuthError::class.java).fromJson(errJson)
+                    } catch (e: Exception) {
+                        null
+                    }
+                    val errMsg = errObj?.errorDescription ?: errObj?.msg ?: errObj?.message ?: ""
+                    if (response.code() >= 500) {
+                        authError = "Server unavailable. Please try again later."
+                    } else {
+                        authError = errMsg.ifBlank { "Failed to send reset instructions: ${response.message()}" }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("AcademyViewModel", "forgotPassword error", e)
+                authError = "An unknown error occurred: ${e.localizedMessage ?: e.message}"
+            } finally {
+                isAuthLoading = false
+            }
+        }
+    }
+
     fun logout() {
         currentUser = null
         selectedCourseForDetail = null
@@ -1563,6 +1966,22 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
 
     fun selectTestAnswer(questionId: Int, index: Int) {
         activeTestProgress?.selectedAnswers?.put(questionId, index)
+    }
+
+    fun toggleReviewQuestion(questionId: Int) {
+        val progress = activeTestProgress ?: return
+        if (progress.reviewedQuestions.contains(questionId)) {
+            progress.reviewedQuestions.remove(questionId)
+        } else {
+            progress.reviewedQuestions.add(questionId)
+        }
+        activeTestProgress = progress.copy()
+    }
+
+    fun clearTestAnswer(questionId: Int) {
+        val progress = activeTestProgress ?: return
+        progress.selectedAnswers.remove(questionId)
+        activeTestProgress = progress.copy()
     }
 
     fun submitActiveTest() {
@@ -1919,6 +2338,7 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
     // AI Mock Test Generator removed as requested (replaced by new Module 3).
 
     fun forceReSeedTestsIfNeeded() {
+        return
         viewModelScope.launch {
             val checkFlag = prefs.getBoolean("has_cleaned_and_seeded_tests_v6", false)
             if (!checkFlag) {
@@ -2071,6 +2491,7 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun generateWeeklyMockTests() {
+        return
         viewModelScope.launch {
             val user = currentUser ?: return@launch
             val existingTests = repository.allTests.first()
@@ -2226,10 +2647,23 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun adminDeleteTest(id: Int) {
-        if (currentUser?.role != "ADMIN") return
+    fun adminDeleteTest(id: Int, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        if (currentUser?.role != "ADMIN") {
+            onError("Permission denied")
+            return
+        }
         viewModelScope.launch {
-            repository.deleteTest(id)
+            val success = repository.deleteTest(id)
+            if (success) {
+                try {
+                    repository.syncAllFromRemote()
+                } catch (e: Exception) {
+                    android.util.Log.e("AcademyViewModel", "Failed to sync tests after delete: ${e.message}", e)
+                }
+                onSuccess()
+            } else {
+                onError("Failed to delete Mock Test from Supabase.")
+            }
         }
     }
 
@@ -2362,6 +2796,48 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
 
     suspend fun uploadLiveClassThumbnail(context: Context, uri: Uri): String {
         return repository.uploadLiveClassThumbnail(context, uri) // Reusing the same generic R2/Supabase upload logic with correct bucket
+    }
+
+    suspend fun uploadStudyWebsiteBanner(context: Context, uri: Uri): String {
+        return repository.uploadStudyWebsiteBanner(context, uri)
+    }
+
+    suspend fun adminAddStudyWebsite(name: String, imageUrl: String, websiteUrl: String) {
+        if (currentUser?.role != "ADMIN") throw Exception("Access denied: Not an Admin")
+        val website = StudyWebsiteEntity(
+            name = name,
+            imageUrl = imageUrl,
+            websiteUrl = websiteUrl,
+            createdAt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+        )
+        repository.insertStudyWebsite(website)
+        repository.syncAllFromRemote()
+    }
+
+    suspend fun adminUpdateStudyWebsite(id: String, name: String, imageUrl: String, websiteUrl: String) {
+        if (currentUser?.role != "ADMIN") throw Exception("Access denied: Not an Admin")
+        val website = StudyWebsiteEntity(
+            id = id,
+            name = name,
+            imageUrl = imageUrl,
+            websiteUrl = websiteUrl,
+            createdAt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+        )
+        repository.updateStudyWebsite(website)
+        repository.syncAllFromRemote()
+    }
+
+    suspend fun adminDeleteStudyWebsite(id: String, imageUrl: String) {
+        if (currentUser?.role != "ADMIN") throw Exception("Access denied: Not an Admin")
+        repository.deleteStudyWebsite(id)
+        if (imageUrl.isNotBlank()) {
+            try {
+                R2SupabaseManager.deleteFileFromSupabaseStorage(getApplication(), imageUrl, "study-websites")
+            } catch (e: Exception) {
+                android.util.Log.e("AcademyViewModel", "Failed to delete file from storage: ${e.message}")
+            }
+        }
+        repository.syncAllFromRemote()
     }
 
     fun adminDeleteBanner(id: Int) {
@@ -2724,51 +3200,19 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
     private suspend fun uploadModuleFile(context: Context, fileUri: android.net.Uri, module: FolderModule): String {
         android.util.Log.d("AcademyViewModel", "[MODULE FILE] Starting upload for ${module.titleName}. Local URI: $fileUri")
         
-        val activeProvider = com.example.service.MediaStorageServiceFactory.getService(context).getStorageType()
         val folderPath = when (module) {
             FolderModule.SYLLABUS -> "course-syllabus"
             FolderModule.PREVIOUS_PAPERS -> "previous-papers"
             FolderModule.FREE_BOOKS -> "free-books"
         }
         
-        val uploadedCustomUrl = kotlin.coroutines.suspendCoroutine<String> { continuation ->
-            if (activeProvider == "BACKBLAZE_B2") {
-                com.example.api.BackblazeB2Manager.uploadFileOnlyToBackblazeB2(
-                    context = context,
-                    creds = com.example.api.BackblazeB2Manager.getCredentials(context),
-                    fileUri = fileUri,
-                    onProgress = {},
-                    onSuccess = { url -> continuation.resume(url) },
-                    onError = { err -> continuation.resumeWithException(Exception(err)) }
-                )
-            } else if (activeProvider == "CLOUDFLARE_R2") {
-                com.example.api.R2SupabaseManager.uploadFileOnlyToCloudflareR2(
-                    context = context,
-                    creds = com.example.api.R2SupabaseManager.getCredentials(context),
-                    fileUri = fileUri,
-                    onProgress = {},
-                    onSuccess = { url -> continuation.resume(url) },
-                    onError = { err -> continuation.resumeWithException(Exception(err)) }
-                )
-            } else {
-                // Supabase is default
-                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                    try {
-                        val url = com.example.api.R2SupabaseManager.uploadFileToSupabaseStorage(
-                            context = context,
-                            fileUri = fileUri,
-                            bucketName = "materials",
-                            folderPath = folderPath
-                        )
-                        continuation.resume(url)
-                    } catch (e: Exception) {
-                        continuation.resumeWithException(e)
-                    }
-                }
-            }
-        }
+        val publicUrl = com.example.api.R2SupabaseManager.uploadFileToSupabaseStorage(
+            context = context,
+            fileUri = fileUri,
+            bucketName = "materials",
+            folderPath = folderPath
+        )
         
-        val publicUrl = com.example.service.MediaStorageServiceFactory.getService(context).resolveMediaUrl(uploadedCustomUrl)
         android.util.Log.i("AcademyViewModel", "[MODULE FILE] Upload successfully completed. Generated Public URL: $publicUrl")
         return publicUrl
     }
@@ -2818,14 +3262,10 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         onComplete: (Boolean) -> Unit
     ) {
         viewModelScope.launch {
+            var imageUrl = ""
             try {
-                var imageUrl = ""
                 if (imageUri != null) {
-                    imageUrl = try {
-                        uploadBatchImageWithRetry(context, imageUri)
-                    } catch (e: Exception) {
-                        ""
-                    }
+                    imageUrl = uploadModuleFileWithRetry(context, imageUri, module)
                 }
                 val newItem = FolderItem(
                     parentId = parentId,
@@ -2833,9 +3273,22 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                     imageUrl = imageUrl
                 )
                 val success = repository.insertFolder(module, newItem)
+                if (success) {
+                    refreshFolderModule(module)
+                }
                 onComplete(success)
             } catch (e: Exception) {
-                android.util.Log.e("AcademyViewModel", "createFolder error", e)
+                android.util.Log.e("AcademyViewModel", "createFolder error: ${e.message}", e)
+                if (imageUrl.isNotBlank()) {
+                    try {
+                        com.example.api.R2SupabaseManager.deleteFileFromSupabaseStorage(context, imageUrl)
+                    } catch (rollbackEx: Exception) {
+                        android.util.Log.e("AcademyViewModel", "Rollback cover image failed", rollbackEx)
+                    }
+                }
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "Error creating folder: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                }
                 onComplete(false)
             }
         }
@@ -2849,13 +3302,27 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         onComplete: (Boolean) -> Unit
     ) {
         viewModelScope.launch {
+            var imageUrl = ""
             try {
-                val imageUrl = uploadModuleFileWithRetry(context, imageUri, module)
+                imageUrl = uploadModuleFileWithRetry(context, imageUri, module)
                 val updated = folder.copy(imageUrl = imageUrl)
                 val success = repository.updateFolder(module, updated)
+                if (success) {
+                    refreshFolderModule(module)
+                }
                 onComplete(success)
             } catch (e: Exception) {
-                android.util.Log.e("AcademyViewModel", "updateFolderCoverImage error", e)
+                android.util.Log.e("AcademyViewModel", "updateFolderCoverImage error: ${e.message}", e)
+                if (imageUrl.isNotBlank()) {
+                    try {
+                        com.example.api.R2SupabaseManager.deleteFileFromSupabaseStorage(context, imageUrl)
+                    } catch (rollbackEx: Exception) {
+                        android.util.Log.e("AcademyViewModel", "Rollback cover image failed", rollbackEx)
+                    }
+                }
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "Error updating cover: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                }
                 onComplete(false)
             }
         }
@@ -2871,6 +3338,9 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
             try {
                 val updated = folder.copy(name = newName.trim())
                 val success = repository.updateFolder(module, updated)
+                if (success) {
+                    refreshFolderModule(module)
+                }
                 onComplete(success)
             } catch (e: Exception) {
                 android.util.Log.e("AcademyViewModel", "renameFolder error", e)
@@ -2889,6 +3359,9 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
             try {
                 val updated = folder.copy(parentId = newParentId)
                 val success = repository.updateFolder(module, updated)
+                if (success) {
+                    refreshFolderModule(module)
+                }
                 onComplete(success)
             } catch (e: Exception) {
                 android.util.Log.e("AcademyViewModel", "moveFolder error", e)
@@ -2905,6 +3378,9 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 val success = repository.deleteFolder(module, folderId)
+                if (success) {
+                    refreshFolderModule(module)
+                }
                 onComplete(success)
             } catch (e: Exception) {
                 android.util.Log.e("AcademyViewModel", "deleteFolder error", e)
@@ -2961,6 +3437,10 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                     val uploadedUrl = try {
                         uploadModuleFileWithRetry(context, uri, module)
                     } catch (e: Exception) {
+                        overallSuccess = false
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            android.widget.Toast.makeText(context, "Storage upload failed: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                        }
                         ""
                     }
 
@@ -2973,9 +3453,25 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                             storageUrl = uploadedUrl,
                             fileSize = fileSize
                         )
-                        repository.insertFile(module, fileItem)
-                    } else {
-                        overallSuccess = false
+                        try {
+                            val success = repository.insertFile(module, fileItem)
+                            if (success) {
+                                refreshFolderModule(module)
+                            } else {
+                                overallSuccess = false
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("AcademyViewModel", "Database insert failed for $fileName, rolling back storage upload", e)
+                            overallSuccess = false
+                            try {
+                                com.example.api.R2SupabaseManager.deleteFileFromSupabaseStorage(context, uploadedUrl)
+                            } catch (rollbackEx: Exception) {
+                                android.util.Log.e("AcademyViewModel", "Rollback failed", rollbackEx)
+                            }
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                android.widget.Toast.makeText(context, "DB Insert failed: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                            }
+                        }
                     }
                     onProgress(index + 1, total, 1.0f)
                 }
@@ -2998,6 +3494,9 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
             try {
                 val updated = file.copy(fileName = newName.trim())
                 val success = repository.updateFile(module, updated)
+                if (success) {
+                    refreshFolderModule(module)
+                }
                 onComplete(success)
             } catch (e: Exception) {
                 android.util.Log.e("AcademyViewModel", "renameFile error", e)
@@ -3016,6 +3515,9 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
             try {
                 val updated = file.copy(folderId = newFolderId)
                 val success = repository.updateFile(module, updated)
+                if (success) {
+                    refreshFolderModule(module)
+                }
                 onComplete(success)
             } catch (e: Exception) {
                 android.util.Log.e("AcademyViewModel", "moveFile error", e)
@@ -3032,13 +3534,27 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         onComplete: (Boolean) -> Unit
     ) {
         viewModelScope.launch {
+            var uploadedUrl = ""
             try {
-                val uploadedUrl = uploadModuleFileWithRetry(context, newUri, module)
+                uploadedUrl = uploadModuleFileWithRetry(context, newUri, module)
                 val updated = file.copy(storageUrl = uploadedUrl)
                 val success = repository.updateFile(module, updated)
+                if (success) {
+                    refreshFolderModule(module)
+                }
                 onComplete(success)
             } catch (e: Exception) {
                 android.util.Log.e("AcademyViewModel", "replaceFile error", e)
+                if (uploadedUrl.isNotBlank()) {
+                    try {
+                        com.example.api.R2SupabaseManager.deleteFileFromSupabaseStorage(context, uploadedUrl)
+                    } catch (rollbackEx: Exception) {
+                        android.util.Log.e("AcademyViewModel", "Rollback failed", rollbackEx)
+                    }
+                }
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "Replace file failed: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                }
                 onComplete(false)
             }
         }
@@ -3052,11 +3568,34 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 val success = repository.deleteFile(module, fileId)
+                if (success) {
+                    refreshFolderModule(module)
+                }
                 onComplete(success)
             } catch (e: Exception) {
                 android.util.Log.e("AcademyViewModel", "deleteFile error", e)
                 onComplete(false)
             }
         }
+    }
+
+    // === Community Popup State & Functions ===
+    var communityPopupConfig by mutableStateOf<CommunityPopupEntity>(
+        repository.getCommunityPopupLocal()
+    )
+        private set
+
+    fun fetchCommunityPopup() {
+        viewModelScope.launch {
+            val popup = repository.getCommunityPopupFromSupabase()
+            if (popup != null) {
+                communityPopupConfig = popup
+            }
+        }
+    }
+
+    suspend fun updateCommunityPopupConfig(config: CommunityPopupEntity): Boolean {
+        communityPopupConfig = config
+        return repository.saveCommunityPopup(config)
     }
 }

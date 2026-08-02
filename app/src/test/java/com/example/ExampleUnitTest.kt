@@ -19,6 +19,128 @@ class ExampleUnitTest {
     println("=====================")
   }
 
+
+  @Test
+  fun auditYouTubeAndSupabase() {
+    println("=== STARTING END-TO-END AUDIT OF YOUTUBE AND SUPABASE INTEGRATION ===")
+    
+    // 1. Check YouTube Data API Key
+    val youtubeApiKey = BuildConfig.YOUTUBE_API_KEY
+    println("YouTube API Key: ${if (youtubeApiKey.isNotBlank()) "PRESENT (Length: ${youtubeApiKey.length})" else "MISSING"}")
+    
+    val videoId = "EWAI1fi3k7Y"
+    val ytUrl = "https://www.googleapis.com/youtube/v3/videos?part=snippet,liveStreamingDetails&id=$videoId&key=$youtubeApiKey"
+    println("YouTube Request URL: $ytUrl")
+    
+    val client = okhttp3.OkHttpClient()
+    
+    if (youtubeApiKey.isNotBlank() && !youtubeApiKey.startsWith("YOUR_")) {
+      try {
+        val ytRequest = okhttp3.Request.Builder().url(ytUrl).build()
+        client.newCall(ytRequest).execute().use { response ->
+          println("YouTube API Response Code: ${response.code}")
+          val body = response.body?.string() ?: ""
+          println("YouTube API Response Body: $body")
+        }
+      } catch (e: Exception) {
+        println("YouTube API Request Exception: ${e.message}")
+        e.printStackTrace()
+      }
+    } else {
+      println("Skipping YouTube API call because key is default or empty.")
+    }
+    
+    // 2. Check Supabase Configuration
+    val rawSupabaseUrl = BuildConfig.SUPABASE_URL.trim()
+    val supabaseUrl = if (rawSupabaseUrl.endsWith("/rest/v1") || rawSupabaseUrl.endsWith("/rest/v1/")) {
+        rawSupabaseUrl.removeSuffix("/").removeSuffix("/rest/v1").removeSuffix("/")
+    } else {
+        rawSupabaseUrl.removeSuffix("/")
+    }
+    
+    val supabaseKey = BuildConfig.SUPABASE_ANON_KEY
+    println("Supabase Base URL: $supabaseUrl")
+    println("Supabase Key: ${if (supabaseKey.isNotBlank()) "PRESENT (Length: ${supabaseKey.length})" else "MISSING"}")
+    
+    if (supabaseUrl.isNotBlank() && supabaseKey.isNotBlank()) {
+      // Fetch PostgREST Root / OpenAPI Spec to inspect the live_classes table schema
+      val rootUrl = "$supabaseUrl/rest/v1/"
+      println("Supabase Root URL (OpenAPI spec): $rootUrl")
+      try {
+        val rootRequest = okhttp3.Request.Builder()
+          .url(rootUrl)
+          .addHeader("apikey", supabaseKey)
+          .addHeader("Authorization", "Bearer $supabaseKey")
+          .build()
+        client.newCall(rootRequest).execute().use { response ->
+          println("Supabase Root Response Code: ${response.code}")
+          val body = response.body?.string() ?: ""
+          if (response.code == 200) {
+            println("Supabase OpenAPI Spec fetched successfully. Searching for live_classes...")
+            // Let's print the parts of the JSON related to "live_classes"
+            val liveClassesIndex = body.indexOf("\"/live_classes\"")
+            if (liveClassesIndex != -1) {
+              val snippet = body.substring(liveClassesIndex, minOf(body.length, liveClassesIndex + 4000))
+              println("=== live_classes SCHEMA SNIPPET ===")
+              println(snippet)
+              println("===================================")
+            } else {
+              println("Could not find '/live_classes' in the OpenAPI Spec!")
+              // Let's print first 2000 chars of the spec
+              println("OpenAPI Spec Start:\n${body.take(2000)}")
+            }
+          } else {
+            println("Failed to fetch OpenAPI spec. Body: $body")
+          }
+        }
+      } catch (e: Exception) {
+        println("Exception fetching OpenAPI spec: ${e.message}")
+        e.printStackTrace()
+      }
+      
+      // 2b. Test INSERT to find if title and youtube_url are accepted
+      val insertUrl = "$supabaseUrl/rest/v1/live_classes"
+      println("Supabase POST URL: $insertUrl")
+      
+      val jsonPayload = """
+        {
+          "title": "E2E Audit Test Live Class",
+          "subject": "Audit Science",
+          "teacherName": "Audit Bot"
+        }
+      """.trimIndent()
+      println("Payload sent to Supabase:\n$jsonPayload")
+      
+      try {
+        val reqBody = jsonPayload.toRequestBody("application/json".toMediaTypeOrNull())
+        val postRequest = okhttp3.Request.Builder()
+          .url(insertUrl)
+          .addHeader("apikey", supabaseKey)
+          .addHeader("Authorization", "Bearer $supabaseKey")
+          .addHeader("Content-Type", "application/json")
+          .addHeader("Prefer", "return=representation")
+          .post(reqBody)
+          .build()
+        client.newCall(postRequest).execute().use { response ->
+          println("Supabase POST Response Code: ${response.code}")
+          val body = response.body?.string() ?: ""
+          println("Supabase POST Response Body: $body")
+          
+          if (response.code == 400) {
+            println("=== FOUND HTTP 400! ===")
+            println("Status Code: 400")
+            println("Response Body: $body")
+          }
+        }
+      } catch (e: Exception) {
+        println("Supabase POST Exception: ${e.message}")
+        e.printStackTrace()
+      }
+    }
+    
+    println("=== END-TO-END AUDIT COMPLETED ===")
+  }
+
   @Test
   fun testDetectVideoSourceType() {
     assertEquals("LOCAL", detectVideoSourceType("content://media/external/video/media/23849"))

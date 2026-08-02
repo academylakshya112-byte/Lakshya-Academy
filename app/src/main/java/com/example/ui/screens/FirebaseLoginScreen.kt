@@ -28,7 +28,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
-data class AppUser(
+data class FirebaseAppUser(
     val displayName: String?,
     val email: String?,
     val uid: String
@@ -51,11 +51,11 @@ fun FirebaseLoginScreen(onBack: () -> Unit) {
     }
 
     var user by remember {
-        mutableStateOf<AppUser?>(
+        mutableStateOf<FirebaseAppUser?>(
             if (isFirebaseAvailable) {
                 try {
                     FirebaseAuth.getInstance().currentUser?.let {
-                        AppUser(it.displayName, it.email, it.uid)
+                        FirebaseAppUser(it.displayName, it.email, it.uid)
                     }
                 } catch (e: Exception) {
                     null
@@ -101,7 +101,7 @@ fun FirebaseLoginScreen(onBack: () -> Unit) {
                             val credential = GoogleAuthProvider.getCredential(account.idToken, null)
                             val authResult = FirebaseAuth.getInstance().signInWithCredential(credential).await()
                             authResult.user?.let { u ->
-                                user = AppUser(u.displayName, u.email, u.uid)
+                                user = FirebaseAppUser(u.displayName, u.email, u.uid)
                                 statusMessage = "Signed in as ${u.displayName}"
                                 
                                 // Save user to Firestore
@@ -315,7 +315,7 @@ fun FirebaseLoginScreen(onBack: () -> Unit) {
             confirmButton = {
                 Button(
                     onClick = {
-                        user = AppUser(
+                        user = FirebaseAppUser(
                             displayName = simName,
                             email = simEmail,
                             uid = "simulated_user_id_${simName.hashCode()}"

@@ -16,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -35,6 +36,7 @@ import coil.compose.rememberAsyncImagePainter
 import coil.compose.AsyncImage
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.lazy.*
+import androidx.compose.foundation.lazy.grid.*
 import com.example.R
 import com.example.data.*
 import com.example.ui.theme.*
@@ -84,8 +86,7 @@ fun MainAppScreen(
                         NoInternetScreen(onRetry = { viewModel.checkInternetStatus() })
                     } else if (currentUser == null) {
                         AuthScreen(
-                            onLogin = { email, name, role, isSignUp -> viewModel.login(email, name, role, isSignUp) },
-                            authError = viewModel.authError
+                            viewModel = viewModel
                         )
                     } else {
                         if (currentUser.role == "ADMIN") {
@@ -108,6 +109,7 @@ fun StudentMainContainer(viewModel: AcademyViewModel) {
     var activeStudyCourse by remember { mutableStateOf<CourseEntity?>(null) }
     var activeDoubtSubject by remember { mutableStateOf<String?>(null) }
     var activeDoubtChapter by remember { mutableStateOf<String?>(null) }
+    var activeWebViewUrl by remember { mutableStateOf<String?>(null) }
 
 
     val context = LocalContext.current
@@ -119,7 +121,7 @@ fun StudentMainContainer(viewModel: AcademyViewModel) {
 
     Scaffold(
         bottomBar = {
-            if (activeStudyCourse == null && studentTab != "doubt_solver") {
+            if (activeStudyCourse == null && studentTab != "doubt_solver" && activeWebViewUrl == null) {
                 NavigationBar {
                     NavigationBarItem(
                         selected = studentTab == "home",
@@ -143,8 +145,13 @@ fun StudentMainContainer(viewModel: AcademyViewModel) {
             }
         }
     ) { innerPadding ->
-        Box(modifier = Modifier.padding(if (studentTab == "doubt_solver") androidx.compose.foundation.layout.PaddingValues(0.dp) else innerPadding)) {
-            if (activeStudyCourse != null) {
+        Box(modifier = Modifier.padding(if (studentTab == "doubt_solver" || activeWebViewUrl != null) androidx.compose.foundation.layout.PaddingValues(0.dp) else innerPadding)) {
+            if (activeWebViewUrl != null) {
+                StudyWebsiteWebViewScreen(
+                    url = activeWebViewUrl!!,
+                    onBack = { activeWebViewUrl = null }
+                )
+            } else if (activeStudyCourse != null) {
                 StudentR2VideosScreen(
                     viewModel = viewModel,
                     initialBatch = activeStudyCourse!!.title,
@@ -161,7 +168,8 @@ fun StudentMainContainer(viewModel: AcademyViewModel) {
                     "home" -> StudentHomeDashboard(
                         viewModel = viewModel,
                         onTabSelect = { studentTab = it },
-                        onPlayCourse = { activeStudyCourse = it }
+                        onPlayCourse = { activeStudyCourse = it },
+                        onOpenWebsite = { activeWebViewUrl = it }
                     )
                     "courses" -> StudentMyCourses(
                         viewModel = viewModel,
@@ -182,6 +190,11 @@ fun StudentMainContainer(viewModel: AcademyViewModel) {
                     )
                     "DASHBOARD" -> StudentProgressDashboard(
                         viewModel = viewModel,
+                        onBack = { studentTab = "home" }
+                    )
+                    "study_websites" -> StudentStudyWebsitesScreen(
+                        viewModel = viewModel,
+                        onOpenWebsite = { activeWebViewUrl = it },
                         onBack = { studentTab = "home" }
                     )
                     "profile" -> StudentProfileView(viewModel = viewModel)
@@ -220,8 +233,10 @@ fun AdminMainContainer(viewModel: AcademyViewModel) {
                     Triple("VIDEOS", "R2 Videos", Icons.Default.CloudUpload),
                     Triple("LIVE", "Live Classes", Icons.Default.LiveTv),
                     Triple("BANNERS", "Banners", Icons.Default.Image),
-                    Triple("WEEKLY_MOCK", "Weekly Mock", Icons.Default.Quiz),
-                    Triple("ALERTS", "Alerts", Icons.Default.Notifications)
+                    Triple("TEST_SERIES", "Test Series", Icons.Default.Quiz),
+                    Triple("ALERTS", "Alerts", Icons.Default.Notifications),
+                    Triple("WEBSITES", "Websites", Icons.Default.Language),
+                    Triple("POPUP", "Popup", Icons.Default.Campaign)
                 )
                 tabs.forEach { (route, label, icon) ->
                     NavigationBarItem(
@@ -242,8 +257,10 @@ fun AdminMainContainer(viewModel: AcademyViewModel) {
                 "VIDEOS" -> AdminR2UploadScreen(viewModel = viewModel)
                 "LIVE" -> AdminLiveClassScreen(viewModel = viewModel)
                 "BANNERS" -> AdminBannerManager(viewModel = viewModel)
-                "WEEKLY_MOCK" -> AdminWeeklyMockManager(viewModel = viewModel)
+                "TEST_SERIES" -> AdminTestSeriesManager(viewModel = viewModel)
                 "ALERTS" -> AdminNotificationAlerts(viewModel = viewModel)
+                "WEBSITES" -> AdminStudyWebsiteScreen(viewModel = viewModel)
+                "POPUP" -> AdminCommunityPopupScreen(viewModel = viewModel)
             }
         }
     }
@@ -255,7 +272,7 @@ fun AdminTopAnnouncer(logout: () -> Unit) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(modifier = Modifier.size(36.dp).clip(CircleShape).background(Color.White)) {
-                    AsyncImage(model = R.drawable.lakshya_logo, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                    AsyncImage(model = R.drawable.lakshya_ghazipur_hd_1785220211284, contentDescription = null, modifier = Modifier.fillMaxSize().scale(1.4f), contentScale = ContentScale.Crop)
                 }
                 Spacer(modifier = Modifier.width(10.dp))
                 Column {
@@ -269,15 +286,19 @@ fun AdminTopAnnouncer(logout: () -> Unit) {
 }
 
 @Composable
-fun DashboardBrandHeader(studentName: String) {
+fun DashboardBrandHeader(studentName: String, photoUri: String = "") {
     Card(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
         Row(modifier = Modifier.fillMaxWidth().padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("Lakshya Academy", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 Text("Namaste $studentName! 👋", fontSize = 22.sp, fontWeight = FontWeight.Black)
             }
-            Box(modifier = Modifier.size(60.dp).clip(CircleShape).background(Color.White)) {
-                AsyncImage(model = R.drawable.lakshya_logo, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Box(modifier = Modifier.size(60.dp).clip(CircleShape).background(Color.White).border(1.5.dp, MaterialTheme.colorScheme.primary, CircleShape), contentAlignment = Alignment.Center) {
+                if (photoUri.isNotBlank()) {
+                    AsyncImage(model = photoUri, contentDescription = "Profile Photo", modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
+                } else {
+                    AsyncImage(model = R.drawable.lakshya_ghazipur_hd_1785220211284, contentDescription = null, modifier = Modifier.fillMaxSize().scale(1.4f), contentScale = ContentScale.Crop)
+                }
             }
         }
     }
@@ -836,58 +857,196 @@ fun StudentTestHubMain(viewModel: AcademyViewModel) {
     }
 
     val testsRaw by viewModel.allTests.collectAsStateWithLifecycle()
-    val tests = remember(testsRaw) {
-        testsRaw.filter {
-            (it.title.startsWith("AI 2.0 Mock Test") && it.type == "Mock Test") ||
-            (it.title.startsWith("Weekly Mock Test - ") && it.type == "Weekly Auto Test")
+    var selectedCategory by remember { mutableStateOf("All") }
+    var selectedFilterChip by remember { mutableStateOf("All") }
+
+    val categories = listOf(
+        "All", "Weekly Test", "Monthly Test", "Chapter Test", "Unit Test",
+        "Practice Test", "Full Syllabus Test", "Model Paper", "Previous Year Paper", "Competitive Mock Test"
+    )
+
+    val filterChips = listOf(
+        "All", "Class 5th", "Class 6th", "Class 7th", "Class 8th", "Class 9th", "Class 10th",
+        "Class 11th", "Class 12th", "Army GD", "SSC", "UP Police", "NEET", "JEE"
+    )
+
+    // Filter published tests
+    val tests = remember(testsRaw, selectedCategory, selectedFilterChip) {
+        testsRaw.filter { test ->
+            val isPublished = !test.type.endsWith("- Unpublished")
+            val catMatch = if (selectedCategory == "All") true else {
+                com.example.ui.screens.getTestCategory(test) == selectedCategory
+            }
+            val filterMatch = if (selectedFilterChip == "All") true else {
+                test.title.contains(selectedFilterChip, ignoreCase = true) ||
+                test.type.contains(selectedFilterChip, ignoreCase = true)
+            }
+            isPublished && catMatch && filterMatch
         }
     }
+
     val scores by viewModel.allScores.collectAsStateWithLifecycle()
-    val userScoreMap = scores.filter { it.userEmail == viewModel.currentUser?.email }.associateBy { it.testId }
+    val userScoreMap = remember(scores, viewModel.currentUser) {
+        scores.filter { it.userEmail == viewModel.currentUser?.email }.associateBy { it.testId }
+    }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Box(modifier = Modifier.fillMaxWidth().background(Color(0xFF6366F1), RoundedCornerShape(12.dp)).padding(16.dp)) {
-            Column {
-                Text("Mock Test & Test Series Hub", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        // Banner
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Test Series & Exam Portal", color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
                 Spacer(modifier = Modifier.height(4.dp))
-                Text("Auto-generated weekly mock tests for Class 5th to 12th now available!", color = Color.White.copy(alpha=0.8f), fontSize = 13.sp)
+                Text("Comprehensive Test Series for School & Competitive Exams", color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp)
             }
         }
-        Spacer(modifier = Modifier.height(16.dp))
         
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Categories Scrollable Row
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(categories) { cat ->
+                val isSelected = selectedCategory == cat
+                FilterChip(
+                    selected = isSelected,
+                    onClick = { selectedCategory = cat },
+                    label = { Text(cat, fontSize = 12.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedLabelColor = Color.White
+                    )
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Class / Exam Filter Chips
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            items(filterChips) { filter ->
+                val isSelected = selectedFilterChip == filter
+                SuggestionChip(
+                    onClick = { selectedFilterChip = filter },
+                    label = { Text(filter, fontSize = 11.sp) },
+                    colors = SuggestionChipDefaults.suggestionChipColors(
+                        containerColor = if (isSelected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                    )
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
         if (tests.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Loading or no tests available...", color = Color.Gray)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.Quiz, contentDescription = null, modifier = Modifier.size(48.dp), tint = Color.Gray)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("No tests published for the selected category.", color = Color.Gray, fontSize = 14.sp)
+                }
             }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(tests) { test ->
                     val userScore = userScoreMap[test.id]
+                    val cat = com.example.ui.screens.getTestCategory(test)
+
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
                         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White)
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        border = BorderStroke(1.dp, Color.LightGray.copy(alpha = 0.5f))
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
-                            Text(test.title, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Timer, null, modifier = Modifier.size(16.dp), tint=Color.Gray)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("${test.durationMinutes} mins | ${test.type}", color = Color.Gray, fontSize=12.sp)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(MaterialTheme.colorScheme.primaryContainer)
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(cat, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                }
+
+                                if (test.hasNegativeMarking) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(Color(0xFFFEE2E2))
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Text("Negative Marking", fontSize = 10.sp, color = Color.Red, fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
                             }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(test.title, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            
+                            Spacer(modifier = Modifier.height(8.dp))
+                            
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Timer, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.Gray)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("${test.durationMinutes} Mins", color = Color.Gray, fontSize = 12.sp)
+                                
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Icon(Icons.Default.HelpOutline, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.Gray)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("50 Questions", color = Color.Gray, fontSize = 12.sp)
+
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Text("${test.marksPerCorrect * 50} Marks", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+
                             Spacer(modifier = Modifier.height(12.dp))
+
                             if (userScore != null) {
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                    Text("Score: ${userScore.score} (Correct: ${userScore.correctAnswers})", color = Color(0xFF10B981), fontWeight = FontWeight.SemiBold)
-                                    Button(onClick = { viewModel.startTest(test) }, shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.buttonColors(containerColor = Color.LightGray)) {
-                                        Text("View Result", color=Color.Black)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text("Status: Attempted", fontSize = 11.sp, color = Color(0xFF10B981), fontWeight = FontWeight.Bold)
+                                        Text("Score: ${userScore.score} / ${userScore.totalQuestions * test.marksPerCorrect}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedButton(
+                                            onClick = { viewModel.startTest(test) },
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text("Re-Attempt", fontSize = 12.sp)
+                                        }
+                                        Button(
+                                            onClick = { viewModel.startTest(test) },
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text("View Result", fontSize = 12.sp)
+                                        }
                                     }
                                 }
                             } else {
-                                Button(onClick = { viewModel.startTest(test) }, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
-                                    Text("Start Test")
+                                Button(
+                                    onClick = { viewModel.startTest(test) },
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Start Test Now", fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -904,36 +1063,151 @@ fun ActiveTestScreen(viewModel: AcademyViewModel) {
     val progress = viewModel.activeTestProgress ?: return
     val currentQuestion = progress.questions.getOrNull(progress.currentQuestionIndex)
     var testLanguage by remember { mutableStateOf("BOTH") } // "ENG", "HIN", "BOTH"
+    var showPaletteDialog by remember { mutableStateOf(false) }
+    var showSubmitConfirmDialog by remember { mutableStateOf(false) }
     
-    val testContext = androidx.compose.ui.platform.LocalContext.current
+    val testContext = LocalContext.current
     LaunchedEffect(Unit) {
         while (true) {
-            kotlinx.coroutines.delay(1000L)
+            delay(1000L)
             com.example.util.StudyTracker.addStudyTime(testContext, 1)
         }
+    }
+
+    if (showSubmitConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showSubmitConfirmDialog = false },
+            title = { Text("Submit Test?") },
+            text = {
+                val answeredCount = progress.selectedAnswers.size
+                val totalQs = progress.questions.size
+                val reviewedCount = progress.reviewedQuestions.size
+                Text("Answered: $answeredCount / $totalQs\nMarked for Review: $reviewedCount\n\nAre you sure you want to submit your test now?")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showSubmitConfirmDialog = false
+                        viewModel.submitActiveTest()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
+                ) {
+                    Text("Submit Test")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSubmitConfirmDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showPaletteDialog) {
+        AlertDialog(
+            onDismissRequest = { showPaletteDialog = false },
+            title = { Text("Question Palette") },
+            text = {
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        Text("🟢 Answered", fontSize = 11.sp)
+                        Text("🟣 Review", fontSize = 11.sp)
+                        Text("⚪ Unanswered", fontSize = 11.sp)
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(5),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.heightIn(max = 280.dp)
+                    ) {
+                        itemsIndexed(progress.questions) { idx, q ->
+                            val isAnswered = progress.selectedAnswers.containsKey(q.id)
+                            val isReviewed = progress.reviewedQuestions.contains(q.id)
+                            val isCurrent = progress.currentQuestionIndex == idx
+
+                            val bgColor = when {
+                                isCurrent -> MaterialTheme.colorScheme.primary
+                                isReviewed -> Color(0xFF8B5CF6) // Purple
+                                isAnswered -> Color(0xFF10B981) // Green
+                                else -> Color.LightGray
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(bgColor)
+                                    .clickable {
+                                        viewModel.updateTestQuestionIndex(idx)
+                                        showPaletteDialog = false
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "${idx + 1}",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showPaletteDialog = false }) {
+                    Text("Close")
+                }
+            }
+        )
     }
     
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text(progress.test.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize=16.sp) },
+            title = { Text(progress.test.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 15.sp) },
             navigationIcon = {
                 IconButton(onClick = { viewModel.exitTest() }) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Exit Test")
                 }
             },
             actions = {
-                Text(
-                    text = String.format("%02d:%02d", progress.secondsRemaining / 60, progress.secondsRemaining % 60),
-                    modifier = Modifier.padding(end = 16.dp),
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Red
-                )
+                IconButton(onClick = { showPaletteDialog = true }) {
+                    Icon(Icons.Default.GridOn, contentDescription = "Question Palette", tint = MaterialTheme.colorScheme.primary)
+                }
+                Box(
+                    modifier = Modifier
+                        .padding(end = 12.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (progress.secondsRemaining < 300) Color(0xFFFEE2E2) else Color(0xFFEEF2FF))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Timer,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = if (progress.secondsRemaining < 300) Color.Red else MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = String.format("%02d:%02d", progress.secondsRemaining / 60, progress.secondsRemaining % 60),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = if (progress.secondsRemaining < 300) Color.Red else MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
             }
         )
+
         LinearProgressIndicator(
             progress = { if (progress.questions.isNotEmpty()) (progress.currentQuestionIndex + 1) / progress.questions.size.toFloat() else 0f },
             modifier = Modifier.fillMaxWidth(),
-            color = Color(0xFF6366F1)
+            color = MaterialTheme.colorScheme.primary
         )
 
         // Language toggle row
@@ -952,7 +1226,7 @@ fun ActiveTestScreen(viewModel: AcademyViewModel) {
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(6.dp))
-                        .background(if (isSelected) Color(0xFF6366F1) else Color.Transparent)
+                        .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
                         .clickable { testLanguage = langCode }
                         .padding(vertical = 6.dp),
                     contentAlignment = Alignment.Center
@@ -968,45 +1242,123 @@ fun ActiveTestScreen(viewModel: AcademyViewModel) {
         }
         
         if (currentQuestion != null) {
-            Column(modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
-                Text("Question ${progress.currentQuestionIndex + 1} of ${progress.questions.size}", color = Color.Gray, fontSize = 12.sp)
+            val isReviewed = progress.reviewedQuestions.contains(currentQuestion.id)
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Question ${progress.currentQuestionIndex + 1} of ${progress.questions.size}",
+                        color = Color.Gray,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+
+                    OutlinedButton(
+                        onClick = { viewModel.toggleReviewQuestion(currentQuestion.id) },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = if (isReviewed) Color(0xFFF3E8FF) else Color.Transparent
+                        )
+                    ) {
+                        Icon(
+                            if (isReviewed) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = if (isReviewed) Color(0xFF8B5CF6) else Color.Gray
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            if (isReviewed) "Marked" else "Mark for Review",
+                            fontSize = 11.sp,
+                            color = if (isReviewed) Color(0xFF8B5CF6) else Color.Gray
+                        )
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(8.dp))
-                Text(formatQuestionOrOptionText(currentQuestion.questionText, testLanguage), fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
-                Spacer(modifier = Modifier.height(24.dp))
+                Text(
+                    formatQuestionOrOptionText(currentQuestion.questionText, testLanguage),
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 17.sp,
+                    lineHeight = 24.sp
+                )
+                Spacer(modifier = Modifier.height(20.dp))
                 
                 val options = listOf(currentQuestion.optionA, currentQuestion.optionB, currentQuestion.optionC, currentQuestion.optionD)
                 options.forEachIndexed { index, optionText ->
                     val isSelected = progress.selectedAnswers[currentQuestion.id] == index
                     Card(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable {
-                            viewModel.selectTestAnswer(currentQuestion.id, index)
-                        },
-                        colors = CardDefaults.cardColors(containerColor = if (isSelected) Color(0xFFEEF2FF) else Color.White),
-                        border = BorderStroke(1.dp, if (isSelected) Color(0xFF6366F1) else Color.LightGray)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .clickable {
+                                viewModel.selectTestAnswer(currentQuestion.id, index)
+                            },
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else Color.White
+                        ),
+                        border = BorderStroke(1.dp, if (isSelected) MaterialTheme.colorScheme.primary else Color.LightGray)
                     ) {
-                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = isSelected, onClick = null, colors = RadioButtonDefaults.colors(selectedColor=Color(0xFF6366F1)))
+                        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = null,
+                                colors = RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary)
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(formatQuestionOrOptionText(optionText, testLanguage))
+                            Text(
+                                formatQuestionOrOptionText(optionText, testLanguage),
+                                fontSize = 15.sp
+                            )
                         }
                     }
                 }
                 
-                Spacer(modifier = Modifier.height(32.dp))
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    TextButton(
+                        onClick = { viewModel.clearTestAnswer(currentQuestion.id) },
+                        enabled = progress.selectedAnswers.containsKey(currentQuestion.id)
+                    ) {
+                        Text("Clear Answer", color = Color.Red, fontSize = 12.sp)
+                    }
+
+                    Button(
+                        onClick = { showSubmitConfirmDialog = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
+                    ) {
+                        Text("Submit Test", fontSize = 12.sp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Button(
-                        onClick = { viewModel.selectTestAnswer(currentQuestion.id, progress.selectedAnswers[currentQuestion.id] ?: -1); viewModel.updateTestQuestionIndex(progress.currentQuestionIndex - 1) },
+                        onClick = { viewModel.updateTestQuestionIndex(progress.currentQuestionIndex - 1) },
                         enabled = progress.currentQuestionIndex > 0,
                         colors = ButtonDefaults.buttonColors(containerColor = Color.LightGray, contentColor = Color.Black)
-                    ) { Text("Previous") }
+                    ) {
+                        Text("Previous")
+                    }
                     
                     if (progress.currentQuestionIndex < progress.questions.size - 1) {
-                        Button(onClick = { viewModel.updateTestQuestionIndex(progress.currentQuestionIndex + 1) }) { Text("Next") }
-                    } else {
-                        Button(
-                            onClick = { viewModel.submitActiveTest() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
-                        ) { Text("Submit Test") }
+                        Button(onClick = { viewModel.updateTestQuestionIndex(progress.currentQuestionIndex + 1) }) {
+                            Text("Next")
+                        }
                     }
                 }
             }

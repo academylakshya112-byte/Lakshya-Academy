@@ -224,13 +224,25 @@ fun YouTubePlayer(
         AndroidView(
             factory = { ctx ->
                 android.webkit.WebView(ctx).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.mediaPlaybackRequiresUserGesture = false
-                    settings.loadWithOverviewMode = true
-                    settings.useWideViewPort = true
-                    settings.allowFileAccess = true
-                    settings.allowContentAccess = true
+                    setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+
+                    val cookieManager = android.webkit.CookieManager.getInstance()
+                    cookieManager.setAcceptCookie(true)
+                    cookieManager.setAcceptThirdPartyCookies(this, true)
+
+                    settings.apply {
+                        javaScriptEnabled = true
+                        domStorageEnabled = true
+                        databaseEnabled = true
+                        mediaPlaybackRequiresUserGesture = false
+                        loadWithOverviewMode = true
+                        useWideViewPort = true
+                        allowFileAccess = true
+                        allowContentAccess = true
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                            mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                        }
+                    }
 
                     webChromeClient = object : android.webkit.WebChromeClient() {
                         override fun onShowCustomView(view: android.view.View?, callback: CustomViewCallback?) {
@@ -245,6 +257,15 @@ fun YouTubePlayer(
                             customViewCallback = null
                             onFullScreenToggle?.invoke(false)
                             activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                        }
+
+                        override fun getDefaultVideoPoster(): android.graphics.Bitmap? {
+                            return android.graphics.Bitmap.createBitmap(1, 1, android.graphics.Bitmap.Config.ARGB_8888)
+                        }
+
+                        override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
+                            android.util.Log.d("YouTubePlayerView", "JS Console: ${consoleMessage?.message()}")
+                            return true
                         }
                     }
 

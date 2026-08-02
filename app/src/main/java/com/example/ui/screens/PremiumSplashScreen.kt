@@ -235,9 +235,9 @@ fun PremiumSplashScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     AsyncImage(
-                        model = R.drawable.lakshya_logo,
+                        model = R.drawable.lakshya_ghazipur_hd_1785220211284,
                         contentDescription = "Lakshya Academy Logo",
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().scale(1.4f),
                         contentScale = ContentScale.Crop
                     )
 
@@ -462,9 +462,9 @@ fun PremiumSplashScreen(
                     )
             )
 
-            // 5. Ghazipur Subtitle
+            // 5. Sirgitha Subtitle
             Text(
-                text = "GHAZIPUR",
+                text = "SIRGITHA",
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = Color(0xFFFFD700), // Gold Honors Accent

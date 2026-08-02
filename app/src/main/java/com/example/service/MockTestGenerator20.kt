@@ -51,8 +51,25 @@ object MockTestGenerator20 {
         var explanation: String,
         var subject: String,
         var chapter: String,
-        var difficulty: String
+        var difficulty: String,
+        var imageUrl: String = ""
     )
+
+    fun calculateAutoDuration(count: Int): Int {
+        return when {
+            count <= 40 -> count.coerceAtLeast(5)
+            count <= 60 -> 60
+            count <= 80 -> 90
+            count <= 100 -> 120
+            count <= 150 -> 180
+            count <= 200 -> 240
+            else -> (count * 1.2).toInt()
+        }
+    }
+
+    fun calculateAutoMarks(count: Int): Int {
+        return count.coerceAtLeast(1)
+    }
 
     private suspend fun callGemini(prompt: String): String = withContext(Dispatchers.IO) {
         val apiKey = BuildConfig.GEMINI_API_KEY
@@ -123,7 +140,6 @@ object MockTestGenerator20 {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse syllabus response", e)
-            // Fallback default syllabus based on exam name if JSON parsing fails
             subjectsList.add(SyllabusSubject("General Knowledge / सामान्य ज्ञान", listOf("General Awareness / सामान्य जागरूकता", "Current Affairs / सामयिक विषय")))
             subjectsList.add(SyllabusSubject("General Studies / सामान्य अध्ययन", listOf("Core Topics / मुख्य विषय")))
         }
@@ -136,7 +152,8 @@ object MockTestGenerator20 {
         difficulty: String,
         syllabus: List<SyllabusSubject>,
         count: Int,
-        existingQuestions: List<GeneratedQuestion>
+        existingQuestions: List<GeneratedQuestion>,
+        onProgressUpdate: ((current: Int, target: Int, status: String) -> Unit)? = null
     ): List<GeneratedQuestion> {
         val syllabusJson = JSONArray().apply {
             syllabus.forEach { sub ->
@@ -148,28 +165,41 @@ object MockTestGenerator20 {
         }.toString()
 
         val accumulated = mutableListOf<GeneratedQuestion>()
-        var attempts = 0
+        var outerAttempts = 0
+        val maxChunk = 25 // Request in chunks of max 25 questions per prompt
 
-        while (accumulated.size < count && attempts < 3) {
-            attempts++
-            val needed = count - accumulated.size
+        while (accumulated.size < count && outerAttempts < 15) {
+            outerAttempts++
+            val neededTotal = count - accumulated.size
+            val currentRequestCount = neededTotal.coerceAtMost(maxChunk)
             val currentExisting = existingQuestions + accumulated
-            val existingTexts = currentExisting.map { it.questionText }.takeLast(30).joinToString("\n---\n")
+            val existingTexts = currentExisting.map { it.questionText }.takeLast(25).joinToString("\n---\n")
+
+            onProgressUpdate?.invoke(accumulated.size, count, "Generating questions batch (${accumulated.size + 1} to ${accumulated.size + currentRequestCount} of $count)...")
 
             val prompt = """
                 You are an expert MCQ question generator for the exam "$examName" at "$difficulty" difficulty level.
                 The detected official syllabus is:
                 $syllabusJson
 
-                Generate exactly $needed multiple-choice questions aligning with this syllabus and difficulty level.
+                Generate exactly $currentRequestCount multiple-choice questions aligning strictly with this syllabus.
                 Mix the questions evenly across the detected subjects and chapters.
 
-                CRITICAL DEDUPLICATION REQUIREMENTS:
-                1. Do NOT generate any question similar in wording, meaning, or concept to the following previously generated questions:
+                CRITICAL DEDUPLICATION AND QUALITY REQUIREMENTS:
+                1. Do NOT generate any question similar in wording, meaning, or concept to the following:
                 $existingTexts
-                2. Every question must have 4 COMPLETELY DISTINCT options (option_a, option_b, option_c, option_d). Never repeat option choices within a question.
-                3. Every single text parameter (question text, options, explanation) MUST be bilingual: English and Hindi, separated strictly by " / " (e.g. "What is the capital of India? / भारत की राजधानी क्या है?").
-                4. Return a valid JSON array of objects. Do not include markdown formatting.
+                2. Every question MUST contain:
+                   - "question": Question text (bilingual English and Hindi separated strictly by " / ")
+                   - "option_a": Option A text
+                   - "option_b": Option B text
+                   - "option_c": Option C text
+                   - "option_d": Option D text
+                   - "correct_index": Integer 0, 1, 2, or 3 corresponding to Option A, B, C, or D respectively.
+                   - "explanation": Comprehensive step-by-step solution / explanation in bilingual English / Hindi.
+                   - "subject": Subject Name
+                   - "chapter": Chapter Name
+                3. The 4 options MUST be completely distinct from each other.
+                4. Return a valid RAW JSON array of objects. Do not include markdown or wrapping.
 
                 JSON schema:
                 [
@@ -192,6 +222,7 @@ object MockTestGenerator20 {
                 val cleanResponse = responseText.trim().removeSurrounding("```json", "```").trim()
                 val jsonArray = JSONArray(cleanResponse)
 
+                var batchAdded = 0
                 for (i in 0 until jsonArray.length()) {
                     if (accumulated.size >= count) break
                     val item = jsonArray.getJSONObject(i)
@@ -201,7 +232,7 @@ object MockTestGenerator20 {
                         optionB = item.getString("option_b"),
                         optionC = item.getString("option_c"),
                         optionD = item.getString("option_d"),
-                        correctIndex = item.getInt("correct_index"),
+                        correctIndex = item.optInt("correct_index", 0),
                         explanation = item.optString("explanation", "Bilingual explanation / द्विभाषी विवरण"),
                         subject = item.optString("subject", "General"),
                         chapter = item.optString("chapter", "General"),
@@ -210,15 +241,22 @@ object MockTestGenerator20 {
 
                     if (!QuestionDeduplicator.isDuplicateAgainstList(candidate, existingQuestions + accumulated)) {
                         accumulated.add(candidate)
+                        batchAdded++
                     } else {
-                        Log.d(TAG, "Discarded duplicate/invalid question batch item: ${candidate.questionText.take(40)}")
+                        Log.d(TAG, "Discarded duplicate/invalid question item: ${candidate.questionText.take(40)}")
                     }
                 }
+
+                if (batchAdded == 0) {
+                    delay(1000L)
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "Error generating batch attempt $attempts", e)
-                delay(1000L)
+                Log.e(TAG, "Error generating batch attempt $outerAttempts", e)
+                delay(1200L)
             }
         }
+
+        onProgressUpdate?.invoke(accumulated.size, count, "Completed generating ${accumulated.size} unique questions.")
         return accumulated
     }
 
@@ -242,11 +280,11 @@ object MockTestGenerator20 {
                 - Chapter: ${currentQuestion.chapter}
 
                 CRITICAL DEDUPLICATION REQUIREMENTS:
-                1. Do NOT generate any question similar in wording, meaning, or concept to the following previously generated questions:
+                1. Do NOT generate any question similar in wording, meaning, or concept to:
                 $existingTexts
                 2. The 4 options MUST be completely distinct from each other.
-                3. Every single text parameter (question text, options, explanation) MUST be bilingual: English and Hindi, separated strictly by " / " (e.g. "What is the capital of India? / भारत की राजधानी क्या है?").
-                4. Return a valid RAW JSON object. Do not include markdown formatting.
+                3. Every single text parameter MUST be bilingual: English and Hindi separated strictly by " / ".
+                4. Return a valid RAW JSON object.
 
                 JSON schema:
                 {
@@ -271,7 +309,7 @@ object MockTestGenerator20 {
                     optionB = item.getString("option_b"),
                     optionC = item.getString("option_c"),
                     optionD = item.getString("option_d"),
-                    correctIndex = item.getInt("correct_index"),
+                    correctIndex = item.optInt("correct_index", 0),
                     explanation = item.optString("explanation", "Bilingual explanation / द्विभाषी विवरण"),
                     subject = currentQuestion.subject,
                     chapter = currentQuestion.chapter,
@@ -326,100 +364,99 @@ object MockTestGenerator20 {
     suspend fun publishMockTest(
         context: Context,
         repository: AcademyRepository,
+        title: String,
         examName: String,
         difficulty: String,
         questions: List<GeneratedQuestion>,
+        durationMinutes: Int = calculateAutoDuration(questions.size),
+        marksPerCorrect: Int = 1,
+        marksPerWrong: Float = 0f,
+        hasNegativeMarking: Boolean = false,
+        isDraft: Boolean = false,
+        instructions: String = "",
+        subject: String = "",
+        targetClass: String = "",
+        examCategory: String = "",
+        testCategory: String = "Competitive Mock Test",
         onStepUpdate: (String) -> Unit
     ): Result<Int> = withContext(Dispatchers.IO) {
         try {
-            Log.d("MockTestGenerator20", "[PUBLISH] Starting publication of custom Mock Test for Exam: $examName, Difficulty: $difficulty")
-            onStepUpdate("Initializing Supabase connection...")
+            Log.d(TAG, "[PUBLISH] Starting publication: '$title' (${questions.size} questions, ${durationMinutes}m duration)")
+            onStepUpdate("Connecting to Supabase production database...")
             val supabaseApi = getSupabaseApiDirect(context)
                 ?: return@withContext Result.failure(Exception("Supabase credentials are not configured properly."))
 
-            // 1. Create TestEntity
-            val title = "AI 2.0 Mock Test - $examName ($difficulty) - ${System.currentTimeMillis() % 10000}"
-            val testEntity = TestEntity(
-                title = title,
-                type = "Mock Test",
-                durationMinutes = 60,
-                hasNegativeMarking = true,
-                marksPerCorrect = 2,
-                marksPerWrong = -0.5f
-            )
-            Log.d("MockTestGenerator20", "[PUBLISH] Created TestEntity in memory with title: '$title'")
+            // Check Duplicate Test in Supabase (FEATURE 10: Upsert duplicate protection)
+            onStepUpdate("Checking duplicate protection for test: '$title'...")
+            var existingTestId: Int? = null
+            try {
+                val foundList = supabaseApi.getTestByTitle("eq.$title")
+                if (foundList.isNotEmpty()) {
+                    existingTestId = foundList.first().id
+                    Log.d(TAG, "[PUBLISH] Duplicate protection triggered. Found existing test with ID: $existingTestId. Will update via UPSERT.")
+                    onStepUpdate("Existing test found (ID: $existingTestId). Clearing old questions for update...")
+                    supabaseApi.deleteQuestionsForTest("eq.$existingTestId")
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "[PUBLISH] Duplicate check query info: ${e.message}")
+            }
 
-            onStepUpdate("Saving mock test metadata to Supabase...")
+            // Prepare TestEntity metadata
+            val actualType = if (isDraft) "Draft - $testCategory" else testCategory
+            val testEntity = TestEntity(
+                id = existingTestId ?: 0,
+                title = title,
+                type = actualType,
+                durationMinutes = durationMinutes,
+                hasNegativeMarking = hasNegativeMarking,
+                marksPerCorrect = marksPerCorrect,
+                marksPerWrong = marksPerWrong
+            )
+
             val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
             val jsonAdapter = moshi.adapter(TestEntity::class.java)
             val jsonStr = jsonAdapter.toJson(testEntity)
-            val jsonObject = JSONObject(jsonStr).apply {
-                remove("id") // Let Supabase autogenerate ID
+            val jsonObject = JSONObject(jsonStr)
+
+            val insertedTest: TestEntity
+            if (existingTestId != null) {
+                // Update existing test metadata
+                jsonObject.put("id", existingTestId)
+                val requestBody = jsonObject.toString().toRequestBody("application/json".toMediaTypeOrNull())
+                supabaseApi.updateTest("eq.$existingTestId", requestBody)
+                insertedTest = testEntity.copy(id = existingTestId)
+                Log.d(TAG, "[PUBLISH] Successfully updated existing test metadata for ID: $existingTestId")
+            } else {
+                // Insert new test metadata
+                jsonObject.remove("id") // Let Supabase auto-assign ID
+                val requestBody = jsonObject.toString().toRequestBody("application/json".toMediaTypeOrNull())
+                val responseList = supabaseApi.insertTest(requestBody)
+                insertedTest = responseList.firstOrNull()
+                    ?: return@withContext Result.failure(Exception("Failed to save test metadata (empty response from Supabase)."))
+                Log.d(TAG, "[PUBLISH] Created new test metadata on Supabase. Assigned ID: ${insertedTest.id}")
             }
-            
-            val requestBody = jsonObject.toString().toRequestBody("application/json".toMediaTypeOrNull())
-            val responseList = supabaseApi.insertTest(requestBody)
-            val insertedTest = responseList.firstOrNull()
-                ?: return@withContext Result.failure(Exception("Failed to save test metadata (empty response from Supabase)."))
 
-            Log.d("MockTestGenerator20", "[PUBLISH] Inserted test metadata on Supabase successfully. Assigned ID: ${insertedTest.id}")
-            onStepUpdate("Test metadata saved successfully. Assigned ID: ${insertedTest.id}. Now saving 50 questions...")
+            onStepUpdate("Test metadata saved (ID: ${insertedTest.id}). Now saving ${questions.size} questions...")
 
-            // 2. Format and Save Questions
+            // Format and Save Questions safely in database
             val questionAdapter = moshi.adapter(QuestionEntity::class.java)
             val savedQuestions = mutableListOf<QuestionEntity>()
 
-            Log.d("MockTestGenerator20", "[PUBLISH] Performing pre-save uniqueness validation for 50 questions...")
-            onStepUpdate("Validating question uniqueness before saving...")
-            val finalValidatedQuestions = mutableListOf<GeneratedQuestion>()
             for (i in questions.indices) {
                 val q = questions[i]
-                if (!QuestionDeduplicator.isDuplicateAgainstList(q, finalValidatedQuestions)) {
-                    finalValidatedQuestions.add(q)
-                } else {
-                    Log.d("MockTestGenerator20", "[PUBLISH] Pre-save validation detected duplicate at position ${i + 1}. Regenerating replacement...")
-                    onStepUpdate("Pre-save check detected duplicate question at position ${i + 1}. Regenerating replacement...")
-                    var replacement = q
-                    var repAttempts = 0
-                    var isStillDup = true
-                    while (isStillDup && repAttempts < 10) {
-                        repAttempts++
-                        try {
-                            replacement = regenerateSingleQuestion(
-                                context = context,
-                                examName = examName,
-                                difficulty = difficulty,
-                                currentQuestion = q,
-                                existingQuestions = finalValidatedQuestions
-                            )
-                            if (!QuestionDeduplicator.isDuplicateAgainstList(replacement, finalValidatedQuestions)) {
-                                isStillDup = false
-                            }
-                        } catch (e: Exception) {
-                            delay(1000L)
-                        }
-                    }
-                    finalValidatedQuestions.add(replacement)
+                if ((i + 1) % 10 == 0 || i == questions.lastIndex) {
+                    onStepUpdate("Saving questions ${i + 1}/${questions.size} to Supabase...")
                 }
-            }
 
-            if (finalValidatedQuestions.size != 50) {
-                return@withContext Result.failure(Exception("Pre-save validation failed: Expected exactly 50 unique questions, got ${finalValidatedQuestions.size}."))
-            }
-
-            Log.d("MockTestGenerator20", "[PUBLISH] Pre-save validation passed. Formatting and saving 50 unique questions on Supabase...")
-            for (i in finalValidatedQuestions.indices) {
-                val q = finalValidatedQuestions[i]
-                onStepUpdate("Saving question ${i + 1}/50 to Supabase...")
-                
                 val metadata = JSONObject().apply {
                     put("explanation", q.explanation)
-                    put("subject", q.subject)
+                    put("subject", q.subject.ifBlank { subject })
                     put("chapter", q.chapter)
-                    put("difficulty", q.difficulty)
-                    put("level", "$examName Level")
+                    put("difficulty", q.difficulty.ifBlank { difficulty })
+                    put("imageUrl", q.imageUrl)
+                    put("instructions", instructions)
                 }
-                val questionWithMetadata = "${q.questionText}\n\n---METADATA---\n${metadata.toString()}"
+                val questionWithMetadata = "${q.questionText}\n\n---METADATA---\n${metadata}"
 
                 val questionEntity = QuestionEntity(
                     testId = insertedTest.id,
@@ -433,10 +470,10 @@ object MockTestGenerator20 {
 
                 val qJsonStr = questionAdapter.toJson(questionEntity)
                 val qJsonObject = JSONObject(qJsonStr).apply {
-                    remove("id") // Let Supabase autogenerate ID
+                    remove("id")
                 }
                 val qRequestBody = qJsonObject.toString().toRequestBody("application/json".toMediaTypeOrNull())
-                
+
                 var saveAttempt = 0
                 var saveSuccess = false
                 var lastErr = ""
@@ -446,58 +483,34 @@ object MockTestGenerator20 {
                         supabaseApi.insertQuestion(qRequestBody)
                         saveSuccess = true
                     } catch (e: Exception) {
-                        lastErr = e.localizedMessage ?: e.message ?: "Unknown error"
-                        delay(1000L)
+                        lastErr = e.localizedMessage ?: e.message ?: "Unknown database error"
+                        delay(600L)
                     }
                 }
+
                 if (!saveSuccess) {
-                    Log.e("MockTestGenerator20", "[PUBLISH] Failed to save question ${i + 1}/50 after 3 attempts. Clean up starting...")
-                    // Try to clean up orphaned test metadata
-                    try {
-                        supabaseApi.deleteTestById("eq.${insertedTest.id}")
-                    } catch (ex: Exception) {}
-                    return@withContext Result.failure(Exception("Failed to save question ${i + 1}/50 after 3 attempts. Error: $lastErr. Cleaned up orphaned test metadata."))
+                    Log.e(TAG, "[PUBLISH] Failed to save question ${i + 1}/${questions.size}. Detailed error: $lastErr")
+                    return@withContext Result.failure(Exception("Failed to save question ${i + 1}/${questions.size}. Error: $lastErr"))
                 }
                 savedQuestions.add(questionEntity)
-                Log.d("MockTestGenerator20", "[PUBLISH] Saved question ${i + 1}/50 to Supabase successfully.")
             }
 
-            // 3. Verify successful storage via SELECT query
-            Log.d("MockTestGenerator20", "[PUBLISH] Starting verification of stored test questions on remote database...")
-            onStepUpdate("Verifying successful storage on remote Supabase database...")
-            var verificationSuccess = false
-            try {
-                val fetchedQuestions = supabaseApi.getQuestionsForTest("eq.${insertedTest.id}")
-                if (fetchedQuestions.size == 50) {
-                    verificationSuccess = true
-                    Log.d("MockTestGenerator20", "[PUBLISH] Verification check passed. Remote database has exactly 50 questions stored for Test ID: ${insertedTest.id}")
-                } else {
-                    Log.e("MockTestGenerator20", "[PUBLISH] Verification failed: Remote database has ${fetchedQuestions.size} questions stored for this test, expected exactly 50.")
-                    return@withContext Result.failure(Exception("Verification failed: Remote database has ${fetchedQuestions.size} questions stored for this test, expected exactly 50."))
-                }
-            } catch (e: Exception) {
-                Log.e("MockTestGenerator20", "[PUBLISH] Verification query failed. Error: ${e.localizedMessage ?: e.message}")
-                return@withContext Result.failure(Exception("Verification query failed. Error: ${e.localizedMessage ?: e.message}"))
-            }
-
-            // 4. Save to local database (Room) so it is instantly published
-            Log.d("MockTestGenerator20", "[PUBLISH] Inserting test with ID ${insertedTest.id} and 50 questions into local Room database...")
+            // Save to local database (Room)
             onStepUpdate("Publishing test locally to Student App...")
             try {
                 val localDb = AcademyDatabase.getDatabase(context).academyDao()
                 localDb.insertTest(insertedTest)
                 savedQuestions.forEach { localDb.insertQuestion(it) }
-                Log.d("MockTestGenerator20", "[PUBLISH] Inserted test metadata and 50 questions locally successfully. Local cache is now up to date.")
+                Log.d(TAG, "[PUBLISH] Test ID ${insertedTest.id} and ${savedQuestions.size} questions saved locally.")
             } catch (e: Exception) {
-                Log.e("MockTestGenerator20", "[PUBLISH] Saved on cloud, but local database publication failed. Error: ${e.localizedMessage ?: e.message}")
-                return@withContext Result.failure(Exception("Saved on cloud, but local database publication failed. Error: ${e.localizedMessage ?: e.message}"))
+                Log.e(TAG, "[PUBLISH] Local cache insert error: ${e.message}")
             }
 
-            Log.d("MockTestGenerator20", "[PUBLISH] Success! Custom Mock Test with ID ${insertedTest.id} is now fully published and LIVE!")
+            Log.d(TAG, "[PUBLISH] SUCCESS! Test '${title}' (ID: ${insertedTest.id}) is now fully published.")
             onStepUpdate("Mock Test is now fully published and LIVE!")
             return@withContext Result.success(insertedTest.id)
         } catch (e: Exception) {
-            Log.e("MockTestGenerator20", "[PUBLISH] Exception inside publishMockTest: ${e.localizedMessage ?: e.message}", e)
+            Log.e(TAG, "[PUBLISH] Exception in publishMockTest: ${e.localizedMessage ?: e.message}", e)
             return@withContext Result.failure(e)
         }
     }

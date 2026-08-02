@@ -218,9 +218,29 @@ class AcademyRepository(private val context: Context) {
         syncWithSupabase { it.updateTest("eq.${test.id}", toRequestBody(test)) }
     }
 
-    suspend fun deleteTest(id: Int) {
-        academyDao.deleteTestById(id)
-        syncWithSupabase { it.deleteTestById("eq.$id") }
+    suspend fun deleteTest(id: Int): Boolean {
+        // Try deleting questions associated with this test on Supabase first (best effort)
+        try {
+            syncWithSupabaseAwait { it.deleteQuestionsForTest("eq.$id") }
+        } catch (e: Exception) {
+            Log.e("AcademyRepository", "Error deleting remote questions for test $id: ${e.message}", e)
+        }
+
+        // Now delete the test itself from Supabase
+        val isDeletedFromSupabase = syncWithSupabaseAwait { it.deleteTestById("eq.$id") }
+
+        if (isDeletedFromSupabase) {
+            // Delete questions and test locally
+            try {
+                academyDao.deleteQuestionsForTest(id)
+            } catch (e: Exception) {
+                Log.e("AcademyRepository", "Error deleting local questions for test $id: ${e.message}", e)
+            }
+            academyDao.deleteTestById(id)
+            return true
+        } else {
+            return false
+        }
     }
 
     suspend fun deleteAllTests() {
@@ -324,6 +344,28 @@ class AcademyRepository(private val context: Context) {
         return R2SupabaseManager.uploadFile(context, uri, "videos")
     }
 
+    // === Study Websites ===
+    val allStudyWebsites: Flow<List<StudyWebsiteEntity>> = academyDao.getAllStudyWebsites()
+
+    suspend fun insertStudyWebsite(website: StudyWebsiteEntity) {
+        academyDao.insertStudyWebsite(website)
+        syncWithSupabase { it.insertStudyWebsite(toRequestBody(website)) }
+    }
+
+    suspend fun updateStudyWebsite(website: StudyWebsiteEntity) {
+        academyDao.insertStudyWebsite(website)
+        syncWithSupabase { it.updateStudyWebsite("eq.${website.id}", toRequestBody(website)) }
+    }
+
+    suspend fun deleteStudyWebsite(id: String) {
+        academyDao.deleteStudyWebsiteById(id)
+        syncWithSupabase { it.deleteStudyWebsiteById("eq.$id") }
+    }
+
+    suspend fun uploadStudyWebsiteBanner(context: Context, uri: Uri): String {
+        return R2SupabaseManager.uploadFileToSupabaseStorage(context, uri, "study-websites")
+    }
+
 data class SupabaseLiveClassResult(
     val isSuccess: Boolean,
     val statusCode: Int = 0,
@@ -363,171 +405,117 @@ data class SupabaseLiveClassResult(
         Log.d("AcademyRepository", "Endpoint URL: $endpointUrl")
         Log.d("AcademyRepository", "Headers: apikey=$maskedKey, Authorization=Bearer $maskedKey, Content-Type=application/json, Prefer=return=representation")
 
-        val ytId = liveClass.effectiveYoutubeId
-        val ytUrl = if (liveClass.youtubeUrl.isNotBlank()) liveClass.youtubeUrl else "https://www.youtube.com/watch?v=$ytId"
-        val thumbUrl = liveClass.effectiveThumbnailUrl
-
-        // Candidate 1: Minimal Schema (Prompt Item 5: title, youtube_url, youtube_live_id, thumbnail_url, status)
-        val payload1 = JSONObject().apply {
-            put("title", liveClass.title.ifBlank { "Lakshya Live Class" })
-            put("youtube_url", ytUrl)
-            put("youtube_live_id", ytId)
-            put("thumbnail_url", thumbUrl)
-            put("status", liveClass.status.ifBlank { "Scheduled" })
+        val dto = liveClass.toDto()
+        val payload = JSONObject().apply {
+            put("title", dto.title)
+            put("subject", dto.subject)
+            put("teacherName", dto.teacherName)
+            put("thumbnailUri", dto.thumbnailUri)
+            put("isLive", dto.isLive)
+            put("scheduledTime", dto.scheduledTime)
+            put("recordingUri", dto.recordingUri)
         }
-
-        // Candidate 2: Full PostgREST Schema
-        val payload2 = JSONObject().apply {
-            put("title", liveClass.title.ifBlank { "Lakshya Live Class" })
-            put("description", liveClass.description.ifBlank { "Interactive Live Stream" })
-            put("teacher_name", liveClass.teacherName.ifBlank { "Lakshya Academy" })
-            put("subject", liveClass.subject.ifBlank { "Live Class" })
-            put("chapter", liveClass.chapter.ifBlank { "Lakshya Classroom" })
-            put("thumbnail_url", thumbUrl)
-            put("youtube_live_id", ytId)
-            put("youtube_url", ytUrl)
-            put("status", liveClass.status.ifBlank { "Scheduled" })
-            put("scheduled_date", liveClass.scheduledDate)
-            put("scheduled_time", liveClass.scheduledTime)
-        }
-
-        // Candidate 3: Ultra Minimal Schema (title, youtube_url, youtube_live_id)
-        val payload3 = JSONObject().apply {
-            put("title", liveClass.title.ifBlank { "Lakshya Live Class" })
-            put("youtube_url", ytUrl)
-            put("youtube_live_id", ytId)
-        }
-
-        // Candidate 4: camelCase Schema (title, youtubeUrl, thumbnailUrl)
-        val payload4 = JSONObject().apply {
-            put("title", liveClass.title.ifBlank { "Lakshya Live Class" })
-            put("youtubeUrl", ytUrl)
-            put("thumbnailUrl", thumbUrl)
-        }
-
-        val candidates = listOf(
-            "Minimal PostgREST Schema" to payload1,
-            "Full PostgREST Schema" to payload2,
-            "Ultra-Minimal Schema" to payload3,
-            "camelCase Schema" to payload4
-        )
 
         val api = getApi()
         var lastResult = SupabaseLiveClassResult(isSuccess = false, message = "Unknown error")
+        val jsonString = payload.toString()
+        Log.d("AcademyRepository", "Request JSON:\n$jsonString")
 
-        for ((index, candidate) in candidates.withIndex()) {
-            val (label, jsonObj) = candidate
-            val jsonString = jsonObj.toString()
-            Log.d("AcademyRepository", "[INSERT ATTEMPT ${index + 1}/4] $label")
-            Log.d("AcademyRepository", "Request JSON:\n$jsonString")
+        try {
+            val reqBody = jsonString.toRequestBody("application/json".toMediaTypeOrNull())
+            val response = api.insertLiveClass(reqBody)
+            val responseCode = response.code()
+            val responseBodyStr = response.body()?.string() ?: ""
+            val errorBodyStr = response.errorBody()?.string() ?: ""
 
-            try {
-                val reqBody = jsonString.toRequestBody("application/json".toMediaTypeOrNull())
-                val response = api.insertLiveClass(reqBody)
-                val responseCode = response.code()
-                val responseBodyStr = response.body()?.string() ?: ""
-                val errorBodyStr = response.errorBody()?.string() ?: ""
+            Log.d("AcademyRepository", "Response Code: $responseCode")
+            if (responseBodyStr.isNotBlank()) Log.d("AcademyRepository", "Response Body:\n$responseBodyStr")
+            if (errorBodyStr.isNotBlank()) Log.d("AcademyRepository", "Error Body:\n$errorBodyStr")
 
-                Log.d("AcademyRepository", "Response Code: $responseCode")
-                if (responseBodyStr.isNotBlank()) Log.d("AcademyRepository", "Response Body:\n$responseBodyStr")
-                if (errorBodyStr.isNotBlank()) Log.d("AcademyRepository", "Error Body:\n$errorBodyStr")
+            if (response.isSuccessful && (responseCode == 200 || responseCode == 201)) {
+                Log.d("AcademyRepository", "[INSERT RESULT: SUCCESS] Inserted successfully into public.live_classes")
+                
+                // Fetch latest live classes from Supabase to sync Room & UI
+                try {
+                    val remoteList = api.getAllLiveClasses()
+                    Log.d("AcademyRepository", "[FETCH RESULT] Retrieved ${remoteList.size} live classes from Supabase after insert.")
+                    remoteList.forEach { academyDao.insertLiveClass(it.toEntity()) }
+                } catch (fetchErr: Exception) {
+                    Log.e("AcademyRepository", "[FETCH RESULT ERROR] Could not refresh list after insert: ${fetchErr.message}", fetchErr)
+                    academyDao.insertLiveClass(liveClass)
+                }
 
-                if (response.isSuccessful && (responseCode == 200 || responseCode == 201)) {
-                    Log.d("AcademyRepository", "[INSERT RESULT: SUCCESS] Inserted successfully into public.live_classes")
-                    
-                    // Fetch latest live classes from Supabase to sync Room & UI
+                Log.d("AcademyRepository", "--------------------------------------------------")
+                return@withContext SupabaseLiveClassResult(
+                    isSuccess = true,
+                    statusCode = responseCode,
+                    message = "Live class added successfully",
+                    rawBody = responseBodyStr
+                )
+            } else {
+                var msg = ""
+                var code = ""
+                var details = ""
+                var hint = ""
+                if (errorBodyStr.isNotBlank()) {
                     try {
-                        val remoteList = api.getAllLiveClasses()
-                        Log.d("AcademyRepository", "[FETCH RESULT] Retrieved ${remoteList.size} live classes from Supabase after insert.")
-                        remoteList.forEach { academyDao.insertLiveClass(it) }
-                    } catch (fetchErr: Exception) {
-                        Log.e("AcademyRepository", "[FETCH RESULT ERROR] Could not refresh list after insert: ${fetchErr.message}", fetchErr)
-                        academyDao.insertLiveClass(liveClass)
-                    }
-
-                    Log.d("AcademyRepository", "--------------------------------------------------")
-                    return@withContext SupabaseLiveClassResult(
-                        isSuccess = true,
-                        statusCode = responseCode,
-                        message = "Live class added successfully",
-                        rawBody = responseBodyStr
-                    )
-                } else {
-                    var msg = ""
-                    var code = ""
-                    var details = ""
-                    var hint = ""
-                    if (errorBodyStr.isNotBlank()) {
-                        try {
-                            val errJson = JSONObject(errorBodyStr)
-                            msg = errJson.optString("message", "")
-                            code = errJson.optString("code", "")
-                            details = errJson.optString("details", "")
-                            hint = errJson.optString("hint", "")
-                        } catch (_: Exception) {
-                            msg = errorBodyStr
-                        }
-                    }
-
-                    Log.e("AcademyRepository", """
-                        [INSERT ATTEMPT ${index + 1} FAILED]
-                        HTTP Status Code: $responseCode
-                        Message: $msg
-                        Code: $code
-                        Details: $details
-                        Hint: $hint
-                        Raw Error: $errorBodyStr
-                    """.trimIndent())
-
-                    lastResult = SupabaseLiveClassResult(
-                        isSuccess = false,
-                        statusCode = responseCode,
-                        message = msg,
-                        code = code,
-                        details = details,
-                        hint = hint,
-                        rawBody = errorBodyStr
-                    )
-
-                    if (responseCode == 401 || responseCode == 403 || code == "42501") {
-                        Log.e("AcademyRepository", "[RLS / AUTH ERROR DETECTED] RLS policy or Auth credential is blocking insert. Stopping further payload attempts.")
-                        break
+                        val errJson = JSONObject(errorBodyStr)
+                        msg = errJson.optString("message", "")
+                        code = errJson.optString("code", "")
+                        details = errJson.optString("details", "")
+                        hint = errJson.optString("hint", "")
+                    } catch (_: Exception) {
+                        msg = errorBodyStr
                     }
                 }
-            } catch (e: Exception) {
-                Log.e("AcademyRepository", "[INSERT EXCEPTION] Attempt ${index + 1} exception: ${e.message}", e)
+
+                Log.e("AcademyRepository", """
+                    [INSERT FAILED]
+                    HTTP Status Code: $responseCode
+                    Message: $msg
+                    Code: $code
+                    Details: $details
+                    Hint: $hint
+                    Raw Error: $errorBodyStr
+                """.trimIndent())
+
                 lastResult = SupabaseLiveClassResult(
                     isSuccess = false,
-                    statusCode = 0,
-                    message = e.message ?: "Network Exception: ${e.javaClass.simpleName}"
+                    statusCode = responseCode,
+                    message = msg,
+                    code = code,
+                    details = details,
+                    hint = hint,
+                    rawBody = errorBodyStr
                 )
             }
+        } catch (e: Exception) {
+            Log.e("AcademyRepository", "[INSERT EXCEPTION] exception: ${e.message}", e)
+            lastResult = SupabaseLiveClassResult(
+                isSuccess = false,
+                statusCode = 0,
+                message = e.message ?: "Network Exception: ${e.javaClass.simpleName}"
+            )
         }
 
-        Log.e("AcademyRepository", "[INSERT RESULT: FAILURE] All candidate inserts failed.")
+        Log.e("AcademyRepository", "[INSERT RESULT: FAILURE] Insert failed.")
         Log.d("AcademyRepository", "--------------------------------------------------")
         return@withContext lastResult
     }
 
     suspend fun updateLiveClass(liveClass: LiveClassEntity): SupabaseLiveClassResult = kotlinx.coroutines.withContext(Dispatchers.IO) {
         val api = getApi()
-        val ytId = liveClass.effectiveYoutubeId
-        val ytUrl = if (liveClass.youtubeUrl.isNotBlank()) liveClass.youtubeUrl else "https://www.youtube.com/watch?v=$ytId"
-        val thumbUrl = liveClass.effectiveThumbnailUrl
+        val dto = liveClass.toDto()
 
         val jsonObject = JSONObject().apply {
-            put("id", liveClass.id)
-            put("title", liveClass.title)
-            put("description", liveClass.description)
-            put("teacher_name", liveClass.teacherName)
-            put("subject", liveClass.subject)
-            put("chapter", liveClass.chapter)
-            put("thumbnail_url", thumbUrl)
-            put("youtube_live_id", ytId)
-            put("youtube_url", ytUrl)
-            put("status", liveClass.status)
-            put("scheduled_date", liveClass.scheduledDate)
-            put("scheduled_time", liveClass.scheduledTime)
+            put("id", dto.id)
+            put("title", dto.title)
+            put("subject", dto.subject)
+            put("teacherName", dto.teacherName)
+            put("thumbnailUri", dto.thumbnailUri)
+            put("isLive", dto.isLive)
+            put("scheduledTime", dto.scheduledTime)
+            put("recordingUri", dto.recordingUri)
         }
 
         val jsonString = jsonObject.toString()
@@ -550,7 +538,7 @@ data class SupabaseLiveClassResult(
                 try {
                     val remoteList = api.getAllLiveClasses()
                     Log.d("AcademyRepository", "[FETCH RESULT] Retrieved ${remoteList.size} live classes after update.")
-                    remoteList.forEach { academyDao.insertLiveClass(it) }
+                    remoteList.forEach { academyDao.insertLiveClass(it.toEntity()) }
                 } catch (e: Exception) {
                     Log.e("AcademyRepository", "Could not fetch list after update: ${e.message}")
                 }
@@ -602,7 +590,7 @@ data class SupabaseLiveClassResult(
                 try {
                     val remoteList = api.getAllLiveClasses()
                     Log.d("AcademyRepository", "[FETCH RESULT] Retrieved ${remoteList.size} remaining live classes.")
-                    remoteList.forEach { academyDao.insertLiveClass(it) }
+                    remoteList.forEach { academyDao.insertLiveClass(it.toEntity()) }
                 } catch (e: Exception) {
                     Log.e("AcademyRepository", "Could not fetch list after delete: ${e.message}")
                 }
@@ -699,6 +687,7 @@ data class SupabaseLiveClassResult(
             Log.d("AcademyRepository", "[BATCH SYNC] Fetching all tests from Supabase...")
             val remoteTests = api.getAllTests()
             Log.d("AcademyRepository", "[BATCH SYNC] Downloaded ${remoteTests.size} tests.")
+            academyDao.deleteAllTests()
             remoteTests.forEach { academyDao.insertTest(it) }
         } catch (e: Exception) {
             Log.e("AcademyRepository", "[BATCH SYNC] Error syncing tests", e)
@@ -709,6 +698,7 @@ data class SupabaseLiveClassResult(
             Log.d("AcademyRepository", "[BATCH SYNC] Fetching all questions from Supabase...")
             val remoteQuestions = api.getAllQuestions()
             Log.d("AcademyRepository", "[BATCH SYNC] Downloaded ${remoteQuestions.size} questions.")
+            academyDao.deleteAllQuestions()
             remoteQuestions.forEach { academyDao.insertQuestion(it) }
         } catch (e: Exception) {
             Log.e("AcademyRepository", "[BATCH SYNC] Error syncing questions", e)
@@ -730,7 +720,7 @@ data class SupabaseLiveClassResult(
             val remoteLiveClasses = api.getAllLiveClasses()
             Log.d("AcademyRepository", "[FETCH RESPONSE] [BATCH SYNC] Downloaded live classes from Supabase: $remoteLiveClasses")
             Log.d("AcademyRepository", "[LIVE CLASSES COUNT] Number of live classes returned: ${remoteLiveClasses.size}")
-            remoteLiveClasses.forEach { academyDao.insertLiveClass(it) }
+            remoteLiveClasses.forEach { academyDao.insertLiveClass(it.toEntity()) }
         } catch (e: Exception) {
             Log.e("AcademyRepository", "[BATCH SYNC] Error syncing live classes", e)
         }
@@ -795,7 +785,18 @@ data class SupabaseLiveClassResult(
         } catch (e: Exception) {
             Log.e("AcademyRepository", "[BATCH SYNC] Error syncing test scores", e)
         }
-        
+
+        // 13. Sync Study Websites
+        try {
+            Log.d("AcademyRepository", "[BATCH SYNC] Fetching all study websites from Supabase...")
+            val remoteWebsites = api.getAllStudyWebsites()
+            Log.d("AcademyRepository", "[BATCH SYNC] Downloaded ${remoteWebsites.size} study websites.")
+            academyDao.deleteAllStudyWebsites()
+            remoteWebsites.forEach { academyDao.insertStudyWebsite(it) }
+        } catch (e: Exception) {
+            Log.e("AcademyRepository", "[BATCH SYNC] Error syncing study websites", e)
+        }
+
         Log.i("AcademyRepository", "[BATCH SYNC] Batch synchronization process completed.")
     }
 
@@ -805,8 +806,9 @@ data class SupabaseLiveClassResult(
             val list = api.getAllLiveClasses()
             Log.d("AcademyRepository", "[FETCH RESPONSE] Direct fetch returned ${list.size} live classes from Supabase: $list")
             Log.d("AcademyRepository", "[LIVE CLASSES COUNT] Number of live classes returned: ${list.size}")
-            list.forEach { academyDao.insertLiveClass(it) }
-            list
+            val entities = list.map { it.toEntity() }
+            entities.forEach { academyDao.insertLiveClass(it) }
+            entities
         } catch (e: Exception) {
             Log.e("AcademyRepository", "[FETCH ERROR] getRemoteLiveClassesDirect failed: ${e.message}", e)
             emptyList()
@@ -842,6 +844,32 @@ data class SupabaseLiveClassResult(
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .build()
+    }
+
+    private fun executeSupabaseRequest(request: okhttp3.Request, requestBodyString: String? = null): String {
+        val client = getOkHttpClient()
+        Log.i("SupabaseRequest", "--- SUPABASE REQUEST ---")
+        Log.i("SupabaseRequest", "URL: ${request.url}")
+        Log.i("SupabaseRequest", "Method: ${request.method}")
+        if (requestBodyString != null) {
+            Log.i("SupabaseRequest", "Request Body: $requestBodyString")
+        }
+        try {
+            client.newCall(request).execute().use { resp ->
+                val code = resp.code
+                val responseBody = resp.body?.string() ?: ""
+                Log.i("SupabaseRequest", "--- SUPABASE RESPONSE ---")
+                Log.i("SupabaseRequest", "Status Code: $code")
+                Log.i("SupabaseRequest", "Response Body: $responseBody")
+                if (!resp.isSuccessful) {
+                    throw Exception("Supabase request failed with code $code: $responseBody")
+                }
+                return responseBody
+            }
+        } catch (e: Exception) {
+            Log.e("SupabaseRequest", "Exception in Supabase Request", e)
+            throw e
+        }
     }
 
     suspend fun syncFoldersAndFilesFromSupabase(module: FolderModule) = withContext(Dispatchers.IO) {
@@ -944,27 +972,10 @@ data class SupabaseLiveClassResult(
     }
 
     suspend fun insertFolder(module: FolderModule, folder: FolderItem): Boolean = withContext(Dispatchers.IO) {
-        var localId: Long = folder.id
-        when (module) {
-            FolderModule.SYLLABUS -> {
-                localId = academyDao.insertSyllabusFolder(
-                    SyllabusFolderEntity(folder.id, folder.parentId, folder.courseId, folder.name, folder.imageUrl, folder.createdAt)
-                )
-            }
-            FolderModule.PREVIOUS_PAPERS -> {
-                localId = academyDao.insertPreviousPaperFolder(
-                    PreviousPaperFolderEntity(folder.id, folder.parentId, folder.name, folder.imageUrl, folder.createdAt)
-                )
-            }
-            FolderModule.FREE_BOOKS -> {
-                localId = academyDao.insertFreeBookFolder(
-                    FreeBookFolderEntity(folder.id, folder.parentId, folder.name, folder.imageUrl, folder.createdAt)
-                )
-            }
-        }
-
         val creds = R2SupabaseManager.getCredentials(context)
-        if (creds.supabaseUrl.isBlank() || creds.supabaseAnonKey.isBlank()) return@withContext true
+        if (creds.supabaseUrl.isBlank() || creds.supabaseAnonKey.isBlank()) {
+            throw Exception("Supabase credentials are not configured!")
+        }
         val baseUrl = creds.cleanBaseUrl.trimEnd('/')
 
         val json = JSONObject().apply {
@@ -977,7 +988,8 @@ data class SupabaseLiveClassResult(
         }
 
         try {
-            val body = json.toString().toRequestBody("application/json".toMediaTypeOrNull())
+            val jsonStr = json.toString()
+            val body = jsonStr.toRequestBody("application/json".toMediaTypeOrNull())
             val req = okhttp3.Request.Builder()
                 .url("$baseUrl/rest/v1/${module.folderTable}")
                 .addHeader("apikey", creds.supabaseAnonKey)
@@ -986,67 +998,43 @@ data class SupabaseLiveClassResult(
                 .post(body)
                 .build()
 
-            var remoteIdToUpdate: Long? = null
-            getOkHttpClient().newCall(req).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val respBody = resp.body?.string() ?: ""
-                    val arr = org.json.JSONArray(respBody)
-                    if (arr.length() > 0) {
-                        val returnedObj = arr.getJSONObject(0)
-                        val remoteId = returnedObj.optLong("id")
-                        if (remoteId > 0 && remoteId != localId) {
-                            remoteIdToUpdate = remoteId
-                        }
-                    }
-                }
+            val respBody = executeSupabaseRequest(req, jsonStr)
+            val arr = org.json.JSONArray(respBody)
+            var remoteId = folder.id
+            if (arr.length() > 0) {
+                val returnedObj = arr.getJSONObject(0)
+                remoteId = returnedObj.optLong("id")
             }
 
-            if (remoteIdToUpdate != null) {
-                val remoteId = remoteIdToUpdate!!
-                val remoteFolder = folder.copy(id = remoteId)
-                when (module) {
-                    FolderModule.SYLLABUS -> {
-                        academyDao.deleteSyllabusFolderById(localId)
-                        academyDao.insertSyllabusFolder(
-                            SyllabusFolderEntity(remoteId, remoteFolder.parentId, remoteFolder.courseId, remoteFolder.name, remoteFolder.imageUrl, remoteFolder.createdAt)
-                        )
-                    }
-                    FolderModule.PREVIOUS_PAPERS -> {
-                        academyDao.deletePreviousPaperFolderById(localId)
-                        academyDao.insertPreviousPaperFolder(
-                            PreviousPaperFolderEntity(remoteId, remoteFolder.parentId, remoteFolder.name, remoteFolder.imageUrl, remoteFolder.createdAt)
-                        )
-                    }
-                    FolderModule.FREE_BOOKS -> {
-                        academyDao.deleteFreeBookFolderById(localId)
-                        academyDao.insertFreeBookFolder(
-                            FreeBookFolderEntity(remoteId, remoteFolder.parentId, remoteFolder.name, remoteFolder.imageUrl, remoteFolder.createdAt)
-                        )
-                    }
+            when (module) {
+                FolderModule.SYLLABUS -> {
+                    academyDao.insertSyllabusFolder(
+                        SyllabusFolderEntity(remoteId, folder.parentId, folder.courseId, folder.name, folder.imageUrl, folder.createdAt)
+                    )
+                }
+                FolderModule.PREVIOUS_PAPERS -> {
+                    academyDao.insertPreviousPaperFolder(
+                        PreviousPaperFolderEntity(remoteId, folder.parentId, folder.name, folder.imageUrl, folder.createdAt)
+                    )
+                }
+                FolderModule.FREE_BOOKS -> {
+                    academyDao.insertFreeBookFolder(
+                        FreeBookFolderEntity(remoteId, folder.parentId, folder.name, folder.imageUrl, folder.createdAt)
+                    )
                 }
             }
             true
         } catch (e: Exception) {
-            Log.e("AcademyRepository", "insertFolder Supabase error: ${e.message}")
-            true
+            Log.e("AcademyRepository", "insertFolder error: ${e.message}", e)
+            throw e
         }
     }
 
     suspend fun updateFolder(module: FolderModule, folder: FolderItem): Boolean = withContext(Dispatchers.IO) {
-        when (module) {
-            FolderModule.SYLLABUS -> academyDao.insertSyllabusFolder(
-                SyllabusFolderEntity(folder.id, folder.parentId, folder.courseId, folder.name, folder.imageUrl, folder.createdAt)
-            )
-            FolderModule.PREVIOUS_PAPERS -> academyDao.insertPreviousPaperFolder(
-                PreviousPaperFolderEntity(folder.id, folder.parentId, folder.name, folder.imageUrl, folder.createdAt)
-            )
-            FolderModule.FREE_BOOKS -> academyDao.insertFreeBookFolder(
-                FreeBookFolderEntity(folder.id, folder.parentId, folder.name, folder.imageUrl, folder.createdAt)
-            )
-        }
-
         val creds = R2SupabaseManager.getCredentials(context)
-        if (creds.supabaseUrl.isBlank()) return@withContext true
+        if (creds.supabaseUrl.isBlank() || creds.supabaseAnonKey.isBlank()) {
+            throw Exception("Supabase credentials are not configured!")
+        }
         val baseUrl = creds.cleanBaseUrl.trimEnd('/')
 
         val json = JSONObject().apply {
@@ -1056,7 +1044,8 @@ data class SupabaseLiveClassResult(
         }
 
         try {
-            val body = json.toString().toRequestBody("application/json".toMediaTypeOrNull())
+            val jsonStr = json.toString()
+            val body = jsonStr.toRequestBody("application/json".toMediaTypeOrNull())
             val req = okhttp3.Request.Builder()
                 .url("$baseUrl/rest/v1/${module.folderTable}?id=eq.${folder.id}")
                 .addHeader("apikey", creds.supabaseAnonKey)
@@ -1064,23 +1053,31 @@ data class SupabaseLiveClassResult(
                 .patch(body)
                 .build()
 
-            var success = false
-            getOkHttpClient().newCall(req).execute().use { success = it.isSuccessful }
-            success
-        } catch (e: Exception) {
+            executeSupabaseRequest(req, jsonStr)
+
+            when (module) {
+                FolderModule.SYLLABUS -> academyDao.insertSyllabusFolder(
+                    SyllabusFolderEntity(folder.id, folder.parentId, folder.courseId, folder.name, folder.imageUrl, folder.createdAt)
+                )
+                FolderModule.PREVIOUS_PAPERS -> academyDao.insertPreviousPaperFolder(
+                    PreviousPaperFolderEntity(folder.id, folder.parentId, folder.name, folder.imageUrl, folder.createdAt)
+                )
+                FolderModule.FREE_BOOKS -> academyDao.insertFreeBookFolder(
+                    FreeBookFolderEntity(folder.id, folder.parentId, folder.name, folder.imageUrl, folder.createdAt)
+                )
+            }
             true
+        } catch (e: Exception) {
+            Log.e("AcademyRepository", "updateFolder error: ${e.message}", e)
+            throw e
         }
     }
 
     suspend fun deleteFolder(module: FolderModule, folderId: Long): Boolean = withContext(Dispatchers.IO) {
-        when (module) {
-            FolderModule.SYLLABUS -> academyDao.deleteSyllabusFolderById(folderId)
-            FolderModule.PREVIOUS_PAPERS -> academyDao.deletePreviousPaperFolderById(folderId)
-            FolderModule.FREE_BOOKS -> academyDao.deleteFreeBookFolderById(folderId)
-        }
-
         val creds = R2SupabaseManager.getCredentials(context)
-        if (creds.supabaseUrl.isBlank()) return@withContext true
+        if (creds.supabaseUrl.isBlank() || creds.supabaseAnonKey.isBlank()) {
+            throw Exception("Supabase credentials are not configured!")
+        }
         val baseUrl = creds.cleanBaseUrl.trimEnd('/')
 
         try {
@@ -1091,36 +1088,25 @@ data class SupabaseLiveClassResult(
                 .delete()
                 .build()
 
-            var success = false
-            getOkHttpClient().newCall(req).execute().use { success = it.isSuccessful }
-            success
-        } catch (e: Exception) {
+            executeSupabaseRequest(req, null)
+
+            when (module) {
+                FolderModule.SYLLABUS -> academyDao.deleteSyllabusFolderById(folderId)
+                FolderModule.PREVIOUS_PAPERS -> academyDao.deletePreviousPaperFolderById(folderId)
+                FolderModule.FREE_BOOKS -> academyDao.deleteFreeBookFolderById(folderId)
+            }
             true
+        } catch (e: Exception) {
+            Log.e("AcademyRepository", "deleteFolder error: ${e.message}", e)
+            throw e
         }
     }
 
     suspend fun insertFile(module: FolderModule, file: FileItem): Boolean = withContext(Dispatchers.IO) {
-        var localId: Long = file.id
-        when (module) {
-            FolderModule.SYLLABUS -> {
-                localId = academyDao.insertSyllabusFile(
-                    SyllabusFileEntity(file.id, file.folderId, file.courseId, file.fileName, file.fileType, file.storageUrl, file.fileSize, file.createdAt)
-                )
-            }
-            FolderModule.PREVIOUS_PAPERS -> {
-                localId = academyDao.insertPreviousPaperFile(
-                    PreviousPaperFileEntity(file.id, file.folderId, file.fileName, file.fileType, file.storageUrl, file.fileSize, file.createdAt)
-                )
-            }
-            FolderModule.FREE_BOOKS -> {
-                localId = academyDao.insertFreeBookFile(
-                    FreeBookFileEntity(file.id, file.folderId, file.fileName, file.fileType, file.storageUrl, file.fileSize, file.createdAt)
-                )
-            }
-        }
-
         val creds = R2SupabaseManager.getCredentials(context)
-        if (creds.supabaseUrl.isBlank()) return@withContext true
+        if (creds.supabaseUrl.isBlank() || creds.supabaseAnonKey.isBlank()) {
+            throw Exception("Supabase credentials are not configured!")
+        }
         val baseUrl = creds.cleanBaseUrl.trimEnd('/')
 
         val json = JSONObject().apply {
@@ -1135,7 +1121,8 @@ data class SupabaseLiveClassResult(
         }
 
         try {
-            val body = json.toString().toRequestBody("application/json".toMediaTypeOrNull())
+            val jsonStr = json.toString()
+            val body = jsonStr.toRequestBody("application/json".toMediaTypeOrNull())
             val req = okhttp3.Request.Builder()
                 .url("$baseUrl/rest/v1/${module.fileTable}")
                 .addHeader("apikey", creds.supabaseAnonKey)
@@ -1144,67 +1131,43 @@ data class SupabaseLiveClassResult(
                 .post(body)
                 .build()
 
-            var remoteIdToUpdate: Long? = null
-            getOkHttpClient().newCall(req).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val respBody = resp.body?.string() ?: ""
-                    val arr = org.json.JSONArray(respBody)
-                    if (arr.length() > 0) {
-                        val returnedObj = arr.getJSONObject(0)
-                        val remoteId = returnedObj.optLong("id")
-                        if (remoteId > 0 && remoteId != localId) {
-                            remoteIdToUpdate = remoteId
-                        }
-                    }
-                }
+            val respBody = executeSupabaseRequest(req, jsonStr)
+            val arr = org.json.JSONArray(respBody)
+            var remoteId = file.id
+            if (arr.length() > 0) {
+                val returnedObj = arr.getJSONObject(0)
+                remoteId = returnedObj.optLong("id")
             }
 
-            if (remoteIdToUpdate != null) {
-                val remoteId = remoteIdToUpdate!!
-                val remoteFile = file.copy(id = remoteId)
-                when (module) {
-                    FolderModule.SYLLABUS -> {
-                        academyDao.deleteSyllabusFileById(localId)
-                        academyDao.insertSyllabusFile(
-                            SyllabusFileEntity(remoteId, remoteFile.folderId, remoteFile.courseId, remoteFile.fileName, remoteFile.fileType, remoteFile.storageUrl, remoteFile.fileSize, remoteFile.createdAt)
-                        )
-                    }
-                    FolderModule.PREVIOUS_PAPERS -> {
-                        academyDao.deletePreviousPaperFileById(localId)
-                        academyDao.insertPreviousPaperFile(
-                            PreviousPaperFileEntity(remoteId, remoteFile.folderId, remoteFile.fileName, remoteFile.fileType, remoteFile.storageUrl, remoteFile.fileSize, remoteFile.createdAt)
-                        )
-                    }
-                    FolderModule.FREE_BOOKS -> {
-                        academyDao.deleteFreeBookFileById(localId)
-                        academyDao.insertFreeBookFile(
-                            FreeBookFileEntity(remoteId, remoteFile.folderId, remoteFile.fileName, remoteFile.fileType, remoteFile.storageUrl, remoteFile.fileSize, remoteFile.createdAt)
-                        )
-                    }
+            when (module) {
+                FolderModule.SYLLABUS -> {
+                    academyDao.insertSyllabusFile(
+                        SyllabusFileEntity(remoteId, file.folderId, file.courseId, file.fileName, file.fileType, file.storageUrl, file.fileSize, file.createdAt)
+                    )
+                }
+                FolderModule.PREVIOUS_PAPERS -> {
+                    academyDao.insertPreviousPaperFile(
+                        PreviousPaperFileEntity(remoteId, file.folderId, file.fileName, file.fileType, file.storageUrl, file.fileSize, file.createdAt)
+                    )
+                }
+                FolderModule.FREE_BOOKS -> {
+                    academyDao.insertFreeBookFile(
+                        FreeBookFileEntity(remoteId, file.folderId, file.fileName, file.fileType, file.storageUrl, file.fileSize, file.createdAt)
+                    )
                 }
             }
             true
         } catch (e: Exception) {
-            Log.e("AcademyRepository", "insertFile Supabase error: ${e.message}")
-            true
+            Log.e("AcademyRepository", "insertFile error: ${e.message}", e)
+            throw e
         }
     }
 
     suspend fun updateFile(module: FolderModule, file: FileItem): Boolean = withContext(Dispatchers.IO) {
-        when (module) {
-            FolderModule.SYLLABUS -> academyDao.insertSyllabusFile(
-                SyllabusFileEntity(file.id, file.folderId, file.courseId, file.fileName, file.fileType, file.storageUrl, file.fileSize, file.createdAt)
-            )
-            FolderModule.PREVIOUS_PAPERS -> academyDao.insertPreviousPaperFile(
-                PreviousPaperFileEntity(file.id, file.folderId, file.fileName, file.fileType, file.storageUrl, file.fileSize, file.createdAt)
-            )
-            FolderModule.FREE_BOOKS -> academyDao.insertFreeBookFile(
-                FreeBookFileEntity(file.id, file.folderId, file.fileName, file.fileType, file.storageUrl, file.fileSize, file.createdAt)
-            )
-        }
-
         val creds = R2SupabaseManager.getCredentials(context)
-        if (creds.supabaseUrl.isBlank()) return@withContext true
+        if (creds.supabaseUrl.isBlank() || creds.supabaseAnonKey.isBlank()) {
+            throw Exception("Supabase credentials are not configured!")
+        }
         val baseUrl = creds.cleanBaseUrl.trimEnd('/')
 
         val json = JSONObject().apply {
@@ -1215,7 +1178,8 @@ data class SupabaseLiveClassResult(
         }
 
         try {
-            val body = json.toString().toRequestBody("application/json".toMediaTypeOrNull())
+            val jsonStr = json.toString()
+            val body = jsonStr.toRequestBody("application/json".toMediaTypeOrNull())
             val req = okhttp3.Request.Builder()
                 .url("$baseUrl/rest/v1/${module.fileTable}?id=eq.${file.id}")
                 .addHeader("apikey", creds.supabaseAnonKey)
@@ -1223,23 +1187,31 @@ data class SupabaseLiveClassResult(
                 .patch(body)
                 .build()
 
-            var success = false
-            getOkHttpClient().newCall(req).execute().use { success = it.isSuccessful }
-            success
-        } catch (e: Exception) {
+            executeSupabaseRequest(req, jsonStr)
+
+            when (module) {
+                FolderModule.SYLLABUS -> academyDao.insertSyllabusFile(
+                    SyllabusFileEntity(file.id, file.folderId, file.courseId, file.fileName, file.fileType, file.storageUrl, file.fileSize, file.createdAt)
+                )
+                FolderModule.PREVIOUS_PAPERS -> academyDao.insertPreviousPaperFile(
+                    PreviousPaperFileEntity(file.id, file.folderId, file.fileName, file.fileType, file.storageUrl, file.fileSize, file.createdAt)
+                )
+                FolderModule.FREE_BOOKS -> academyDao.insertFreeBookFile(
+                    FreeBookFileEntity(file.id, file.folderId, file.fileName, file.fileType, file.storageUrl, file.fileSize, file.createdAt)
+                )
+            }
             true
+        } catch (e: Exception) {
+            Log.e("AcademyRepository", "updateFile error: ${e.message}", e)
+            throw e
         }
     }
 
     suspend fun deleteFile(module: FolderModule, fileId: Long): Boolean = withContext(Dispatchers.IO) {
-        when (module) {
-            FolderModule.SYLLABUS -> academyDao.deleteSyllabusFileById(fileId)
-            FolderModule.PREVIOUS_PAPERS -> academyDao.deletePreviousPaperFileById(fileId)
-            FolderModule.FREE_BOOKS -> academyDao.deleteFreeBookFileById(fileId)
-        }
-
         val creds = R2SupabaseManager.getCredentials(context)
-        if (creds.supabaseUrl.isBlank()) return@withContext true
+        if (creds.supabaseUrl.isBlank() || creds.supabaseAnonKey.isBlank()) {
+            throw Exception("Supabase credentials are not configured!")
+        }
         val baseUrl = creds.cleanBaseUrl.trimEnd('/')
 
         try {
@@ -1250,11 +1222,170 @@ data class SupabaseLiveClassResult(
                 .delete()
                 .build()
 
-            var success = false
-            getOkHttpClient().newCall(req).execute().use { success = it.isSuccessful }
-            success
-        } catch (e: Exception) {
+            executeSupabaseRequest(req, null)
+
+            when (module) {
+                FolderModule.SYLLABUS -> academyDao.deleteSyllabusFileById(fileId)
+                FolderModule.PREVIOUS_PAPERS -> academyDao.deletePreviousPaperFileById(fileId)
+                FolderModule.FREE_BOOKS -> academyDao.deleteFreeBookFileById(fileId)
+            }
             true
+        } catch (e: Exception) {
+            Log.e("AcademyRepository", "deleteFile error: ${e.message}", e)
+            throw e
+        }
+    }
+
+    // --- Supabase Authentication & Profile Management ---
+
+    suspend fun sendOtp(phone: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val body = mapOf("phone" to phone)
+            val response = getApi().sendOtp(body)
+            response.isSuccessful
+        } catch (e: Exception) {
+            Log.e("AcademyRepository", "sendOtp error: ${e.message}", e)
+            false
+        }
+    }
+
+    suspend fun verifyOtp(phone: String, token: String): SupabaseSession = withContext(Dispatchers.IO) {
+        val body = mapOf(
+            "type" to "sms",
+            "phone" to phone,
+            "token" to token
+        )
+        getApi().verifyOtp(body)
+    }
+
+    suspend fun verifyGoogleIdToken(idToken: String): SupabaseSession = withContext(Dispatchers.IO) {
+        val body = mapOf(
+            "provider" to "google",
+            "id_token" to idToken
+        )
+        getApi().verifyGoogleIdToken(body)
+    }
+
+    suspend fun getProfileById(id: String): ProfileEntity? = withContext(Dispatchers.IO) {
+        try {
+            val list = getApi().getProfileById("eq.$id")
+            list.firstOrNull()
+        } catch (e: Exception) {
+            Log.e("AcademyRepository", "getProfileById error: ${e.message}", e)
+            null
+        }
+    }
+
+    suspend fun checkAnyProfilesExist(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val list = getApi().checkAnyProfilesExist()
+            list.isNotEmpty()
+        } catch (e: Exception) {
+            Log.e("AcademyRepository", "checkAnyProfilesExist error: ${e.message}", e)
+            false
+        }
+    }
+
+    suspend fun insertProfile(profile: ProfileEntity): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val response = getApi().insertProfile(profile)
+            response.isSuccessful
+        } catch (e: Exception) {
+            Log.e("AcademyRepository", "insertProfile error: ${e.message}", e)
+            false
+        }
+    }
+
+    suspend fun updateProfile(id: String, updates: Map<String, String>): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val response = getApi().updateProfile("eq.$id", updates)
+            response.isSuccessful
+        } catch (e: Exception) {
+            Log.e("AcademyRepository", "updateProfile error: ${e.message}", e)
+            false
+        }
+    }
+
+    suspend fun signUpWithEmail(email: String, password: String, metadata: Map<String, String>): retrofit2.Response<okhttp3.ResponseBody> = withContext(Dispatchers.IO) {
+        val request = SignUpRequest(
+            email = email,
+            password = password,
+            data = metadata
+        )
+        getApi().signUpWithEmail(request)
+    }
+
+    suspend fun signInWithPassword(email: String, password: String): retrofit2.Response<okhttp3.ResponseBody> = withContext(Dispatchers.IO) {
+        val body = mapOf(
+            "email" to email,
+            "password" to password
+        )
+        getApi().signInWithPassword(body)
+    }
+
+    suspend fun recoverPassword(email: String): retrofit2.Response<okhttp3.ResponseBody> = withContext(Dispatchers.IO) {
+        val body = mapOf(
+            "email" to email
+        )
+        getApi().recoverPassword(body)
+    }
+
+    // === Community Popup ===
+    fun getCommunityPopupLocal(): CommunityPopupEntity {
+        val prefs = context.getSharedPreferences("community_popup_prefs", Context.MODE_PRIVATE)
+        val defaultId = "00000000-0000-0000-0000-000000000001"
+        return CommunityPopupEntity(
+            id = prefs.getString("id", defaultId) ?: defaultId,
+            title = prefs.getString("title", "SHADOWXRAHUL") ?: "SHADOWXRAHUL",
+            description = prefs.getString("description", "Join our Official Community to receive the latest updates, study materials, notices, announcements, and important information.") ?: "Join our Official Community to receive the latest updates, study materials, notices, announcements, and important information.",
+            imageUrl = prefs.getString("image_url", "") ?: "",
+            whatsappUrl = prefs.getString("whatsapp_url", "") ?: "",
+            telegramUrl = prefs.getString("telegram_url", "") ?: "",
+            enabled = prefs.getBoolean("enabled", true)
+        )
+    }
+
+    fun saveCommunityPopupLocal(entity: CommunityPopupEntity) {
+        context.getSharedPreferences("community_popup_prefs", Context.MODE_PRIVATE).edit()
+            .putString("id", entity.id)
+            .putString("title", entity.title)
+            .putString("description", entity.description)
+            .putString("image_url", entity.imageUrl)
+            .putString("whatsapp_url", entity.whatsappUrl)
+            .putString("telegram_url", entity.telegramUrl)
+            .putBoolean("enabled", entity.enabled)
+            .apply()
+    }
+
+    suspend fun getCommunityPopupFromSupabase(): CommunityPopupEntity? = withContext(Dispatchers.IO) {
+        try {
+            val list = getApi().getCommunityPopup()
+            if (list.isNotEmpty()) {
+                val config = list.first()
+                saveCommunityPopupLocal(config)
+                config
+            } else {
+                getCommunityPopupLocal()
+            }
+        } catch (e: Exception) {
+            Log.e("AcademyRepository", "Failed to fetch community_popup from Supabase: ${e.message}")
+            getCommunityPopupLocal()
+        }
+    }
+
+    suspend fun saveCommunityPopup(entity: CommunityPopupEntity): Boolean = withContext(Dispatchers.IO) {
+        saveCommunityPopupLocal(entity)
+        syncWithSupabaseAwait { api ->
+            val existing = try { api.getCommunityPopup() } catch(e: Exception) { emptyList() }
+            val targetId = if (existing.isNotEmpty()) existing.first().id else entity.id
+            val finalEntity = entity.copy(id = targetId)
+            val rb = toRequestBody(finalEntity)
+            if (existing.isNotEmpty()) {
+                api.updateCommunityPopup("eq.$targetId", rb)
+            } else {
+                api.insertCommunityPopup(rb)
+            }
         }
     }
 }
+

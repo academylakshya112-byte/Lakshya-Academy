@@ -74,6 +74,9 @@ interface AcademyDao {
     @Query("DELETE FROM questions WHERE id = :id")
     suspend fun deleteQuestionById(id: Int)
 
+    @Query("DELETE FROM questions WHERE testId = :testId")
+    suspend fun deleteQuestionsForTest(testId: Int)
+
     @Query("DELETE FROM questions")
     suspend fun deleteAllQuestions()
 
@@ -214,6 +217,19 @@ interface AcademyDao {
 
     @Query("DELETE FROM free_book_files WHERE id = :id")
     suspend fun deleteFreeBookFileById(id: Long)
+
+    // === Study Websites ===
+    @Query("SELECT * FROM study_websites ORDER BY id DESC")
+    fun getAllStudyWebsites(): Flow<List<StudyWebsiteEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertStudyWebsite(website: StudyWebsiteEntity)
+
+    @Query("DELETE FROM study_websites WHERE id = :id")
+    suspend fun deleteStudyWebsiteById(id: String)
+
+    @Query("DELETE FROM study_websites")
+    suspend fun deleteAllStudyWebsites()
 }
 
 @Database(
@@ -237,9 +253,10 @@ interface AcademyDao {
         PreviousPaperFolderEntity::class,
         PreviousPaperFileEntity::class,
         FreeBookFolderEntity::class,
-        FreeBookFileEntity::class
+        FreeBookFileEntity::class,
+        StudyWebsiteEntity::class
     ],
-    version = 17,
+    version = 19,
     exportSchema = false
 )
 abstract class AcademyDatabase : RoomDatabase() {

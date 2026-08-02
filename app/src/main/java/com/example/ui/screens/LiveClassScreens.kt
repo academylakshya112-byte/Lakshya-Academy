@@ -51,68 +51,88 @@ fun extractYoutubeId(input: String): String {
     val trimmed = input.trim()
     if (trimmed.isEmpty()) return ""
     
-    android.util.Log.d("LivePlayerDebug", "Extracting ID from: $trimmed")
+    android.util.Log.d("LivePlayerDebug", "Extracting ID from input: $trimmed")
     
-    // Check if it's already a clean ID (11 chars, common for YouTube)
-    if (trimmed.length == 11 && !trimmed.contains("/") && !trimmed.contains("?") && !trimmed.contains("=")) {
-        android.util.Log.d("LivePlayerDebug", "Detected raw ID: $trimmed")
+    // Check if it's already a clean raw ID (11 chars, common for YouTube)
+    if (trimmed.length == 11 && !trimmed.contains("/") && !trimmed.contains("?") && !trimmed.contains("=") && !trimmed.contains("&")) {
+        android.util.Log.d("LivePlayerDebug", "Detected raw 11-char Video ID: $trimmed")
         return trimmed
     }
     
-    // Pattern for youtube.com/live/VIDEO_ID
-    val livePattern = Regex("youtube\\.com/live/([^/?#\\s]+)")
-    val liveMatch = livePattern.find(trimmed)
-    if (liveMatch != null) {
-        val id = liveMatch.groupValues[1]
-        android.util.Log.d("LivePlayerDebug", "Detected /live/ pattern: $id")
-        return id
-    }
+    // Pattern checks for /shorts/, /live/, watch?v=, youtu.be/, /embed/, /v/
+    val patterns = listOf(
+        Regex("""youtube\.com/shorts/([^?&/#\s]+)""", RegexOption.IGNORE_CASE),
+        Regex("""youtube\.com/live/([^?&/#\s]+)""", RegexOption.IGNORE_CASE),
+        Regex("""youtube\.com/embed/([^?&/#\s]+)""", RegexOption.IGNORE_CASE),
+        Regex("""youtube\.com/v/([^?&/#\s]+)""", RegexOption.IGNORE_CASE),
+        Regex("""youtu\.be/([^?&/#\s]+)""", RegexOption.IGNORE_CASE),
+        Regex("""[?&]v=([^?&/#\s]+)""", RegexOption.IGNORE_CASE)
+    )
 
-    // Pattern for watch?v=VIDEO_ID
-    val watchPattern = Regex("[?&]v=([^&#\\s]+)")
-    val watchMatch = watchPattern.find(trimmed)
-    if (watchMatch != null) {
-        val id = watchMatch.groupValues[1]
-        android.util.Log.d("LivePlayerDebug", "Detected watch?v= pattern: $id")
-        return id
-    }
-
-    // Pattern for youtu.be/VIDEO_ID
-    val bePattern = Regex("youtu\\.be/([^/?#\\s]+)")
-    val beMatch = bePattern.find(trimmed)
-    if (beMatch != null) {
-        val id = beMatch.groupValues[1]
-        android.util.Log.d("LivePlayerDebug", "Detected youtu.be/ pattern: $id")
-        return id
-    }
-
-    // Pattern for youtube.com/embed/VIDEO_ID
-    val embedPattern = Regex("embed/([^/?#\\s]+)")
-    val embedMatch = embedPattern.find(trimmed)
-    if (embedMatch != null) {
-        val id = embedMatch.groupValues[1]
-        android.util.Log.d("LivePlayerDebug", "Detected embed/ pattern: $id")
-        return id
-    }
-
-    // Fallback: if there's no slashes and it's 10-12 chars, it might be the ID
-    if (!trimmed.contains("/") && !trimmed.contains("?") && !trimmed.contains("=")) {
-        android.util.Log.d("LivePlayerDebug", "Fallback raw ID: $trimmed")
-        return trimmed
-    }
-    
-    // If it's a URL but we couldn't match, maybe extract the last path segment
-    if (trimmed.contains("/")) {
-        val lastSegment = trimmed.substringAfterLast("/")
-        val cleanSegment = lastSegment.substringBefore("?").substringBefore("&")
-        if (cleanSegment.length == 11) {
-            android.util.Log.d("LivePlayerDebug", "Detected last segment ID: $cleanSegment")
-            return cleanSegment
+    for (pattern in patterns) {
+        val match = pattern.find(trimmed)
+        if (match != null && match.groupValues.size > 1) {
+            val id = match.groupValues[1].trim()
+            if (id.isNotBlank()) {
+                android.util.Log.d("LivePlayerDebug", "Extracted Video ID ($id) using pattern: ${pattern.pattern}")
+                return id
+            }
         }
     }
 
-    android.util.Log.d("LivePlayerDebug", "No pattern matched, returning input: $trimmed")
-    return trimmed
+    // Substring fallback
+    val fallbackId = when {
+        trimmed.contains("watch?v=") -> trimmed.substringAfter("watch?v=").substringBefore("&").substringBefore("?").substringBefore("#")
+        trimmed.contains("youtu.be/") -> trimmed.substringAfter("youtu.be/").substringBefore("?").substringBefore("&").substringBefore("#")
+        trimmed.contains("youtube.com/live/") -> trimmed.substringAfter("youtube.com/live/").substringBefore("?").substringBefore("&").substringBefore("#")
+        trimmed.contains("youtube.com/shorts/") -> trimmed.substringAfter("youtube.com/shorts/").substringBefore("?").substringBefore("&").substringBefore("#")
+        trimmed.contains("youtube.com/embed/") -> trimmed.substringAfter("youtube.com/embed/").substringBefore("?").substringBefore("&").substringBefore("#")
+        !trimmed.contains("/") && !trimmed.contains("?") -> trimmed
+        else -> {
+            if (trimmed.contains("/")) {
+                val lastSegment = trimmed.substringAfterLast("/").substringBefore("?").substringBefore("&")
+                if (lastSegment.length == 11) lastSegment else ""
+            } else ""
+        }
+    }.trim()
+
+    android.util.Log.d("LivePlayerDebug", "Fallback extracted ID: $fallbackId")
+    return fallbackId
+}
+
+// Helper to open video in YouTube app or default browser fallback
+fun openInYouTubeAppOrBrowser(context: Context, videoId: String) {
+    if (videoId.isBlank()) return
+    val webUri = Uri.parse("https://www.youtube.com/watch?v=$videoId")
+    val appUri = Uri.parse("vnd.youtube:$videoId")
+
+    val youtubePackageIntent = Intent(Intent.ACTION_VIEW, webUri).apply {
+        setPackage("com.google.android.youtube")
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+    }
+    val youtubeUriIntent = Intent(Intent.ACTION_VIEW, appUri).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+    }
+    val browserIntent = Intent(Intent.ACTION_VIEW, webUri).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+    }
+
+    try {
+        android.util.Log.d("LivePlayerDebug", "Attempting to launch YouTube app via package...")
+        context.startActivity(youtubePackageIntent)
+    } catch (e: Exception) {
+        try {
+            android.util.Log.d("LivePlayerDebug", "Attempting to launch YouTube app via vnd.youtube URI...")
+            context.startActivity(youtubeUriIntent)
+        } catch (e2: Exception) {
+            try {
+                android.util.Log.d("LivePlayerDebug", "YouTube app unavailable, launching default browser...")
+                context.startActivity(browserIntent)
+            } catch (e3: Exception) {
+                android.util.Log.e("LivePlayerDebug", "Failed to open browser: ${e3.localizedMessage}")
+            }
+        }
+    }
 }
 
 // ==========================================
@@ -531,7 +551,7 @@ enum class LivePlayerStatus {
 class YouTubeWebInterface(
     private val onReady: () -> Unit,
     private val onPlaying: () -> Unit,
-    private val onError: (String) -> Unit,
+    private val onError: (code: Int, msg: String) -> Unit,
     private val view: WebView
 ) {
     @android.webkit.JavascriptInterface
@@ -553,10 +573,10 @@ class YouTubeWebInterface(
             2 -> "Invalid HTML5 parameter"
             5 -> "HTML5 player error"
             100 -> "Video not found or removed"
-            101, 150 -> "Embedding not allowed by owner"
+            101, 150, 152 -> "Embedding restricted by video owner (Error $code)"
             else -> "YouTube error code $code"
         }
-        view.post { onError(msg) }
+        view.post { onError(code, msg) }
     }
 }
 
@@ -564,34 +584,51 @@ class YouTubeWebInterface(
 @Composable
 fun EmbeddedYoutubePlayer(
     videoId: String,
+    originalUrl: String = "",
     onReady: () -> Unit,
     onPlaying: () -> Unit,
-    onError: (String) -> Unit,
+    onError: (code: Int, msg: String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val embedUrl = "https://www.youtube.com/embed/$videoId?autoplay=1&playsinline=1"
+    
+    // Log original URL, extracted Video ID, and generated embed URL as required
+    android.util.Log.d("LivePlayerDebug", "Original URL: $originalUrl")
+    android.util.Log.d("LivePlayerDebug", "Extracted Video ID: $videoId")
+    android.util.Log.d("LivePlayerDebug", "Generated Embed URL: $embedUrl")
+
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
 
     AndroidView(
         factory = { ctx ->
             WebView(ctx).apply {
                 webViewRef.value = this
+                setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+
+                val cookieManager = android.webkit.CookieManager.getInstance()
+                cookieManager.setAcceptCookie(true)
+                cookieManager.setAcceptThirdPartyCookies(this, true)
+
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
-                        android.util.Log.d("LivePlayerDebug", "WebView: Page Finished: $url")
+                        android.util.Log.d("LivePlayerDebug", "WebView: Page Finished: $url | HW Accel=${view?.isHardwareAccelerated}")
                     }
 
                     override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
                         super.onReceivedError(view, request, error)
                         val msg = "WebView Error: ${error?.description}"
                         android.util.Log.e("LivePlayerDebug", "$msg for URL: ${request?.url}")
-                        // Only report main frame errors to avoid triggering on minor subresource failures
                         if (request?.isForMainFrame == true) {
-                            post { onError(msg) }
+                            post { onError(-1, msg) }
                         }
                     }
                 }
                 webChromeClient = object : WebChromeClient() {
+                    override fun getDefaultVideoPoster(): android.graphics.Bitmap? {
+                        return android.graphics.Bitmap.createBitmap(1, 1, android.graphics.Bitmap.Config.ARGB_8888)
+                    }
+
                     override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
                         android.util.Log.d("LivePlayerDebug", "JS Console: ${consoleMessage?.message()}")
                         return true
@@ -604,9 +641,15 @@ fun EmbeddedYoutubePlayer(
                     javaScriptEnabled = true
                     mediaPlaybackRequiresUserGesture = false
                     domStorageEnabled = true
+                    databaseEnabled = true
+                    javaScriptCanOpenWindowsAutomatically = true
                     useWideViewPort = true
                     loadWithOverviewMode = true
                     allowFileAccess = true
+                    allowContentAccess = true
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                        mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                    }
                 }
                 
                 addJavascriptInterface(YouTubeWebInterface(
@@ -628,7 +671,7 @@ fun EmbeddedYoutubePlayer(
                     <body>
                         <div id="player"></div>
                         <script>
-                            console.log("YouTube API Loading...");
+                            console.log("YouTube API Loading for Video ID: $videoId");
                             var tag = document.createElement('script');
                             tag.src = "https://www.youtube.com/iframe_api";
                             var firstScriptTag = document.getElementsByTagName('script')[0];
@@ -676,7 +719,7 @@ fun EmbeddedYoutubePlayer(
                             }
 
                             function onPlayerError(event) {
-                                console.log("Player Error: " + event.data);
+                                console.log("Player Error Code: " + event.data);
                                 if (window.Android) {
                                     window.Android.playerError(event.data);
                                 }
@@ -705,6 +748,7 @@ fun LivePlayerScreen(
     var playerStatus by remember { mutableStateOf(LivePlayerStatus.LOADING_URL) }
     var exactErrorMessage by remember { mutableStateOf("") }
     var extractedVideoId by remember { mutableStateOf("") }
+    var originalLiveUrl by remember { mutableStateOf("") }
 
     // Logcat helper
     fun logDebug(msg: String) {
@@ -719,6 +763,7 @@ fun LivePlayerScreen(
         try {
             val freshClass = viewModel.getLiveClassFromSupabase(liveClass.id)
             val liveUrl = freshClass?.effectiveYoutubeId ?: liveClass.effectiveYoutubeId
+            originalLiveUrl = liveUrl
             logDebug("Live URL Loaded: $liveUrl")
 
             if (liveUrl.isBlank()) {
@@ -737,7 +782,11 @@ fun LivePlayerScreen(
             }
 
             extractedVideoId = vidId
-            logDebug("Video ID Extracted: $extractedVideoId")
+            val embedUrl = "https://www.youtube.com/embed/$vidId?autoplay=1&playsinline=1"
+
+            logDebug("Original URL: $liveUrl")
+            logDebug("Extracted Video ID: $vidId")
+            logDebug("Generated Embed URL: $embedUrl")
 
             playerStatus = LivePlayerStatus.INITIALIZING_PLAYER
             logDebug("Detected player implementation: WebView + YouTube IFrame API")
@@ -781,6 +830,7 @@ fun LivePlayerScreen(
             if (extractedVideoId.isNotBlank() && (playerStatus == LivePlayerStatus.INITIALIZING_PLAYER || playerStatus == LivePlayerStatus.READY || playerStatus == LivePlayerStatus.PLAYING)) {
                 EmbeddedYoutubePlayer(
                     videoId = extractedVideoId,
+                    originalUrl = originalLiveUrl,
                     onReady = {
                         playerStatus = LivePlayerStatus.READY
                         logDebug("Player Ready")
@@ -789,10 +839,16 @@ fun LivePlayerScreen(
                         playerStatus = LivePlayerStatus.PLAYING
                         logDebug("Playback Started")
                     },
-                    onError = { errorMsg ->
+                    onError = { errorCode, errorMsg ->
                         playerStatus = LivePlayerStatus.ERROR_PLAYER_FAILED
                         exactErrorMessage = errorMsg
-                        logDebug("Playback Failed: $errorMsg")
+                        logDebug("Playback Failed (Code $errorCode): $errorMsg")
+                        
+                        if (errorCode == 101 || errorCode == 150 || errorCode == 152) {
+                            logDebug("Embedding disabled (Error $errorCode). Automatically launching YouTube app or browser...")
+                            Toast.makeText(context, "Embedding restricted. Opening in YouTube...", Toast.LENGTH_LONG).show()
+                            openInYouTubeAppOrBrowser(context, extractedVideoId)
+                        }
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -840,6 +896,15 @@ fun LivePlayerScreen(
                         Text("Playback Failed", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(exactErrorMessage, color = Color.LightGray, fontSize = 12.sp, textAlign = TextAlign.Center)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = { openInYouTubeAppOrBrowser(context, extractedVideoId) },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Open in YouTube App", color = Color.White)
+                        }
                     }
                 }
                 else -> { /* Rendered by EmbeddedYoutubePlayer above or nothing needed */ }

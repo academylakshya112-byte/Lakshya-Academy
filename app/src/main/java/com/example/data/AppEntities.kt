@@ -193,6 +193,52 @@ private fun parseYtId(input: String): String {
     return trimmed
 }
 
+@com.squareup.moshi.JsonClass(generateAdapter = true)
+data class SupabaseLiveClassDto(
+    @Json(name = "id") val id: Int = 0,
+    @Json(name = "title") val title: String = "",
+    @Json(name = "subject") val subject: String = "",
+    @Json(name = "teacherName") val teacherName: String = "",
+    @Json(name = "thumbnailUri") val thumbnailUri: String = "",
+    @Json(name = "isLive") val isLive: Boolean = false,
+    @Json(name = "scheduledTime") val scheduledTime: Long = 0L,
+    @Json(name = "recordingUri") val recordingUri: String = ""
+) {
+    fun toEntity(): LiveClassEntity {
+        return LiveClassEntity(
+            id = this.id,
+            title = this.title,
+            subject = this.subject,
+            teacherName = this.teacherName,
+            thumbnailUrl = this.thumbnailUri,
+            thumbnail = this.thumbnailUri,
+            thumbnailUri = this.thumbnailUri,
+            youtubeUrl = this.recordingUri,
+            recordingUri = this.recordingUri,
+            youtubeLiveId = parseYtId(this.recordingUri),
+            status = if (this.isLive) "Live" else "Scheduled",
+            isLive = this.isLive,
+            scheduledTime = this.scheduledTime.toString(),
+            scheduledDate = ""
+        )
+    }
+}
+
+fun LiveClassEntity.toDto(): SupabaseLiveClassDto {
+    val ytId = this.effectiveYoutubeId
+    val ytUrl = if (this.youtubeUrl.isNotBlank()) this.youtubeUrl else "https://www.youtube.com/watch?v=$ytId"
+    return SupabaseLiveClassDto(
+        id = this.id,
+        title = this.title.ifBlank { "Lakshya Live Class" },
+        subject = this.subject.ifBlank { "Live Class" },
+        teacherName = this.teacherName.ifBlank { "Lakshya Academy" },
+        thumbnailUri = this.effectiveThumbnailUrl,
+        isLive = this.status == "Live" || this.isLive,
+        scheduledTime = try { this.scheduledTime.trim().toLong() } catch (_: Exception) { 0L },
+        recordingUri = ytUrl
+    )
+}
+
 @Entity(tableName = "ai_animation_limits")
 data class AiAnimationLimitEntity(
     @PrimaryKey val userEmail: String,
@@ -313,4 +359,80 @@ data class FreeBookFileEntity(
 ) {
     fun toFileItem() = FileItem(id, folder_id, null, file_name, file_type, storage_url, file_size, created_at)
 }
+
+// --- Supabase Profile and Auth Session Entities ---
+data class ProfileEntity(
+    val id: String, // UUID
+    val name: String,
+    val email: String?,
+    val phone: String?,
+    @Json(name = "photo_url") val photoUrl: String?,
+    val role: String, // "admin" or "student"
+    @Json(name = "created_at") val createdAt: String?,
+    @Json(name = "last_login") val lastLogin: String?,
+    val status: String = "active"
+)
+
+data class SupabaseUser(
+    val id: String,
+    val email: String?,
+    val phone: String?,
+    @Json(name = "created_at") val createdAt: String?,
+    @Json(name = "user_metadata") val userMetadata: Map<String, Any>? = null
+)
+
+data class SupabaseSession(
+    @Json(name = "access_token") val accessToken: String,
+    @Json(name = "refresh_token") val refreshToken: String,
+    @Json(name = "expires_in") val expiresIn: Long,
+    val user: SupabaseUser
+)
+
+data class SupabaseSignupResponse(
+    val id: String? = null,
+    val email: String? = null,
+    @Json(name = "access_token") val accessToken: String? = null,
+    @Json(name = "refresh_token") val refreshToken: String? = null,
+    @Json(name = "expires_in") val expiresIn: Long? = null,
+    val user: SupabaseUser? = null
+)
+
+data class SupabaseAuthError(
+    val error: String? = null,
+    @Json(name = "error_description") val errorDescription: String? = null,
+    val msg: String? = null,
+    val message: String? = null,
+    val code: Int? = null
+)
+
+data class SignUpRequest(
+    val email: String,
+    val password: String,
+    val data: Map<String, String>
+)
+
+@Entity(tableName = "study_websites")
+data class StudyWebsiteEntity(
+    @PrimaryKey val id: String = java.util.UUID.randomUUID().toString(),
+    @Json(name = "name") val name: String,
+    @Json(name = "image_url") val imageUrl: String,
+    @Json(name = "website_url") val websiteUrl: String,
+    @Json(name = "created_at") val createdAt: String? = null
+)
+
+@Entity(tableName = "community_popup")
+data class CommunityPopupEntity(
+    @PrimaryKey val id: String = "00000000-0000-0000-0000-000000000001",
+    @Json(name = "title") val title: String = "SHADOWXRAHUL",
+    @Json(name = "description") val description: String = "Join our Official Community to receive the latest updates, study materials, notices, announcements, and important information.",
+    @Json(name = "image_url") val imageUrl: String = "",
+    @Json(name = "whatsapp_url") val whatsappUrl: String = "",
+    @Json(name = "telegram_url") val telegramUrl: String = "",
+    @Json(name = "enabled") val enabled: Boolean = true,
+    @Json(name = "created_at") val createdAt: String? = null,
+    @Json(name = "updated_at") val updatedAt: String? = null
+)
+
+
+
 
