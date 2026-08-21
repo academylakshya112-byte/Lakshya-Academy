@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Lakshya Academy R..NA..🪖"
+rootProject.name = "SHADOW X RAHUL"
 
 include(":app")

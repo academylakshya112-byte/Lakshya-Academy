@@ -4,37 +4,41 @@ import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Launch
+import androidx.compose.material.icons.filled.NewReleases
+import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.R
 import com.example.data.AppUpdateEntity
-import com.example.ui.theme.*
 import com.example.ui.viewmodel.AcademyViewModel
 import com.example.util.UpdateDownloadState
-import java.io.File
-import java.util.Locale
 
 @Composable
 fun AppUpdateSystemHandler(
@@ -42,29 +46,43 @@ fun AppUpdateSystemHandler(
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val updateState by viewModel.appUpdateManager.downloadState.collectAsStateWithLifecycle()
     var isLaterDismissed by remember { mutableStateOf(false) }
 
+    // Re-verify update status on app resume
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.checkForUpdates(forceRecheck = true)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
-        // Base App content
+        // Base App Content
         content()
 
         when (val state = updateState) {
             is UpdateDownloadState.UpdateAvailable -> {
                 if (state.isForce) {
-                    // Full screen force update blocks the entire app
-                    ForceUpdateScreen(
+                    // Non-dismissible Force Update Overlay / Screen
+                    ForceUpdateOverlay(
                         update = state.update,
-                        downloadState = state,
-                        onUpdateClick = { viewModel.appUpdateManager.startDownload(state.update) },
-                        onCancelClick = { (context as? Activity)?.finish() } // Force exit if cancelled
+                        onUpdateClick = {
+                            viewModel.appUpdateManager.openUpdateLink(state.update)
+                        }
                     )
                 } else if (!isLaterDismissed) {
-                    // Optional update dialog on top of the app
+                    // Premium Optional Update Dialog
                     OptionalUpdateDialog(
                         update = state.update,
                         onUpdateClick = {
-                            viewModel.appUpdateManager.startDownload(state.update)
+                            viewModel.appUpdateManager.openUpdateLink(state.update)
                         },
                         onLaterClick = {
                             isLaterDismissed = true
@@ -72,48 +90,11 @@ fun AppUpdateSystemHandler(
                     )
                 }
             }
-            is UpdateDownloadState.Downloading -> {
-                // Determine if this downloading is force or optional
-                // We default to displaying download progress
-                // If it is a force download we show full screen, otherwise we show a dialog
-                val isForce = (updateState as? UpdateDownloadState.UpdateAvailable)?.isForce == true
-                if (isForce || !isLaterDismissed) {
-                    DownloadProgressOverlay(
-                        percentage = state.percentage,
-                        speedKbps = state.speedKbps,
-                        remainingSeconds = state.remainingSeconds,
-                        isForce = isForce,
-                        onCancelClick = {
-                            viewModel.appUpdateManager.cancelDownload()
-                            if (isForce) {
-                                (context as? Activity)?.finish()
-                            } else {
-                                isLaterDismissed = true
-                            }
-                        }
-                    )
-                }
-            }
-            is UpdateDownloadState.ReadyToInstall -> {
-                // Show installation prompt
-                LaunchedEffect(state.apkFile) {
-                    viewModel.appUpdateManager.installApk(state.apkFile)
-                }
-                InstallationOverlay(
-                    onInstallClick = { viewModel.appUpdateManager.installApk(state.apkFile) },
-                    onCancelClick = {
-                        viewModel.appUpdateManager.cleanup()
-                        viewModel.appUpdateManager.setIdle()
-                        isLaterDismissed = true
-                    }
-                )
-            }
             is UpdateDownloadState.Error -> {
-                // Error screen or dialog
                 ErrorDialog(
                     message = state.message,
                     onRetryClick = {
-                        viewModel.checkForUpdates()
+                        viewModel.checkForUpdates(forceRecheck = true)
                     },
                     onDismissClick = {
                         viewModel.appUpdateManager.setIdle()
@@ -122,7 +103,7 @@ fun AppUpdateSystemHandler(
                 )
             }
             else -> {
-                // Do nothing if Idle or NoUpdate
+                // Idle or NoUpdate
             }
         }
     }
@@ -134,345 +115,411 @@ fun OptionalUpdateDialog(
     onUpdateClick: () -> Unit,
     onLaterClick: () -> Unit
 ) {
-    AlertDialog(
-        onDismissRequest = { /* Prevent dismiss on outside touch */ },
-        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-        title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.SystemUpdate,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(32.dp)
-                )
-                Text(
-                    text = "Update Available",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 20.sp
-                )
+    val context = LocalContext.current
+    val currentVersion = remember(context) {
+        try {
+            com.example.BuildConfig.VERSION_NAME.ifBlank {
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.0"
             }
-        },
-        text = {
+        } catch (e: Exception) {
+            "1.0.0"
+        }
+    }
+
+    Dialog(
+        onDismissRequest = { /* Prevent outside dismiss */ },
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)
+    ) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            shadowElevation = 12.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp)
+        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(
-                    text = "Lakshya Academy",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(text = "Latest Version: ${update.latestVersion}", fontWeight = FontWeight.Medium)
-                }
-
-                if (update.releaseNotes.isNotBlank()) {
-                    Divider(color = MaterialTheme.colorScheme.outlineVariant)
-                    Text(text = "What's New:", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                // Premium Badge Header
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    Color(0xFF6366F1),
+                                    Color(0xFF8B5CF6),
+                                    Color(0xFFEC4899)
+                                )
+                            )
                         ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = update.releaseNotes,
-                            modifier = Modifier.padding(12.dp),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.RocketLaunch,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(36.dp)
+                    )
                 }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = onUpdateClick,
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-            ) {
-                Text("Update Now")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onLaterClick) {
-                Text("Later", color = MaterialTheme.colorScheme.outline)
-            }
-        },
-        shape = RoundedCornerShape(16.dp)
-    )
-}
 
-@Composable
-fun ForceUpdateScreen(
-    update: AppUpdateEntity,
-    downloadState: UpdateDownloadState,
-    onUpdateClick: () -> Unit,
-    onCancelClick: () -> Unit
-) {
-    // Disable Back Button fully during force update
-    BackHandler(enabled = true) { /* Do nothing */ }
+                Spacer(modifier = Modifier.height(16.dp))
 
-    val gradientBrush = Brush.verticalGradient(
-        colors = listOf(
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
-            MaterialTheme.colorScheme.background
-        )
-    )
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(gradientBrush)
-            .padding(24.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(20.dp)
-        ) {
-            // Logo / Update Icon
-            Box(
-                modifier = Modifier
-                    .size(100.dp)
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.SystemUpdate,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(54.dp)
+                // App Title
+                Text(
+                    text = "SHADOW X RAHUL",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    letterSpacing = 1.5.sp
                 )
-            }
 
-            Text(
-                text = "Lakshya Academy",
-                fontWeight = FontWeight.Bold,
-                fontSize = 24.sp,
-                color = MaterialTheme.colorScheme.primary,
-                textAlign = TextAlign.Center
-            )
+                Text(
+                    text = "New Update Available!",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
 
-            Text(
-                text = "Critical Update Required",
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 22.sp,
-                textAlign = TextAlign.Center
-            )
+                Spacer(modifier = Modifier.height(16.dp))
 
-            Text(
-                text = "To ensure maximum security, app stability, and access to new premium academic features, you must update to version ${update.latestVersion}.",
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                textAlign = TextAlign.Center,
-                lineHeight = 20.sp
-            )
-
-            if (update.releaseNotes.isNotBlank()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                    ),
-                    shape = RoundedCornerShape(12.dp)
+                // Version Comparison Box
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            text = "Release Notes:",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(bottom = 8.dp)
+                            text = "Current",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.Medium
                         )
                         Text(
-                            text = update.releaseNotes,
-                            style = MaterialTheme.typography.bodyMedium,
-                            lineHeight = 20.sp
+                            text = "v$currentVersion",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    Icon(
+                        imageVector = Icons.Default.ArrowForward,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "Latest",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = "v${update.safeLatestVersion}",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Button(
-                onClick = onUpdateClick,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(Icons.Default.CloudDownload, contentDescription = null)
-                    Text("Update Now", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                // Release Notes Section
+                if (update.safeReleaseNotes.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 160.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                            .padding(14.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.NewReleases,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "What's New:",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = update.safeReleaseNotes,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
-            }
 
-            TextButton(
-                onClick = onCancelClick,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Exit Application", color = MaterialTheme.colorScheme.error)
+                // Link missing warning if applicable
+                if (update.safeApkUrl.isBlank()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "⚠️ Update link is currently unavailable.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Action Buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onLaterClick,
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Text("Later")
+                    }
+
+                    Button(
+                        onClick = onUpdateClick,
+                        modifier = Modifier.weight(1.3f).height(48.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.Launch, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Text("Update Now", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        }
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-fun DownloadProgressOverlay(
-    percentage: Int,
-    speedKbps: Double,
-    remainingSeconds: Long,
-    isForce: Boolean,
-    onCancelClick: () -> Unit
+fun ForceUpdateOverlay(
+    update: AppUpdateEntity,
+    onUpdateClick: () -> Unit
 ) {
-    if (isForce) {
-        BackHandler(enabled = true) { /* Do nothing */ }
+    // Strictly disable back press for force update
+    BackHandler(enabled = true) { /* Block back action */ }
+
+    val context = LocalContext.current
+    val currentVersion = remember(context) {
+        try {
+            com.example.BuildConfig.VERSION_NAME.ifBlank {
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.0"
+            }
+        } catch (e: Exception) {
+            "1.0.0"
+        }
     }
 
     Dialog(
         onDismissRequest = { },
-        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
     ) {
-        Card(
-            shape = RoundedCornerShape(16.dp),
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.92f))
+                .padding(20.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+            Surface(
+                shape = RoundedCornerShape(28.dp),
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 16.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp)
             ) {
-                CircularProgressIndicator(
-                    progress = percentage / 100f,
-                    modifier = Modifier.size(72.dp),
-                    strokeWidth = 6.dp,
-                    color = MaterialTheme.colorScheme.primary
-                )
-
-                Text(
-                    text = "Downloading Update...",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-
-                Text(
-                    text = "$percentage%",
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-
-                LinearProgressIndicator(
-                    progress = percentage / 100f,
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(8.dp)
-                        .clip(RoundedCornerShape(4.dp)),
-                    color = MaterialTheme.colorScheme.primary
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .padding(24.dp)
+                        .verticalScroll(rememberScrollState()),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    val speedText = if (speedKbps > 1024) {
-                        String.format(Locale.getDefault(), "%.1f MB/s", speedKbps / 1024.0)
-                    } else {
-                        String.format(Locale.getDefault(), "%.0f KB/s", speedKbps)
+                    // Alert Icon Badge
+                    Box(
+                        modifier = Modifier
+                            .size(76.dp)
+                            .clip(CircleShape)
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(
+                                        Color(0xFFEF4444),
+                                        Color(0xFFF97316)
+                                    )
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SystemUpdate,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(40.dp)
+                        )
                     }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
                     Text(
-                        text = "Speed: $speedText",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "SHADOW X RAHUL",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        letterSpacing = 1.5.sp
                     )
 
-                    val timeText = if (remainingSeconds == 999L) {
-                        "Estimating..."
-                    } else if (remainingSeconds > 60) {
-                        "${remainingSeconds / 60}m ${remainingSeconds % 60}s"
-                    } else {
-                        "${remainingSeconds}s remaining"
-                    }
                     Text(
-                        text = timeText,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "Critical Update Required",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(top = 4.dp)
                     )
-                }
 
-                Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "A required system update is available. You must update to the latest version to continue using the application.",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        lineHeight = 19.sp,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
 
-                OutlinedButton(
-                    onClick = onCancelClick,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Text("Cancel Download")
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    // Version Badges
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Current Version", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("v$currentVersion", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        Icon(
+                            imageVector = Icons.Default.ArrowForward,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(20.dp)
+                        )
+
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Required Version", fontSize = 11.sp, color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Medium)
+                            Text("v${update.safeLatestVersion}", fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+
+                    // Release Notes Section
+                    if (update.safeReleaseNotes.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                            ),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Text(
+                                    text = "Release Notes:",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = update.safeReleaseNotes,
+                                    fontSize = 12.sp,
+                                    lineHeight = 17.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    // Warning if link is missing
+                    if (update.safeApkUrl.isBlank()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "⚠️ Update link is missing in database. Please contact support.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.error,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    // Mandatory Update Button
+                    Button(
+                        onClick = onUpdateClick,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.Launch, contentDescription = null)
+                            Text(
+                                text = "Update Now via Telegram",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
             }
         }
     }
-}
-
-@Composable
-fun InstallationOverlay(
-    onInstallClick: () -> Unit,
-    onCancelClick: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = { },
-        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-        title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Info,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(30.dp)
-                )
-                Text("Update Ready", fontWeight = FontWeight.Bold)
-            }
-        },
-        text = {
-            Text("The update package has been downloaded successfully. Click install to update your app.")
-        },
-        confirmButton = {
-            Button(onClick = onInstallClick) {
-                Text("Install Now")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onCancelClick) {
-                Text("Cancel", color = MaterialTheme.colorScheme.outline)
-            }
-        },
-        shape = RoundedCornerShape(16.dp)
-    )
 }
 
 @Composable
@@ -493,13 +540,13 @@ fun ErrorDialog(
                     imageVector = Icons.Default.ErrorOutline,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(30.dp)
+                    modifier = Modifier.size(28.dp)
                 )
-                Text("Update Failed", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
+                Text("Update Error", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
             }
         },
         text = {
-            Text(message)
+            Text(message, fontSize = 14.sp)
         },
         confirmButton = {
             Button(
@@ -514,6 +561,7 @@ fun ErrorDialog(
                 Text("Close")
             }
         },
-        shape = RoundedCornerShape(16.dp)
+        shape = RoundedCornerShape(20.dp)
     )
 }
+

@@ -6,6 +6,7 @@ import android.util.Log
 import com.example.api.R2SupabaseManager
 import com.example.api.SupabaseApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.RequestBody
@@ -22,13 +23,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class AcademyRepository(private val context: Context) {
-    private val academyDao = AcademyDatabase.getDatabase(context).academyDao()
+    val academyDao = AcademyDatabase.getDatabase(context).academyDao()
 
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()
 
-    private fun getApi(): SupabaseApi {
+    fun getApi(): SupabaseApi {
         val creds = R2SupabaseManager.getCredentials(context)
         val rawUrl = if (creds.supabaseUrl.isNotBlank()) creds.cleanBaseUrl else "https://dummy.supabase.co"
         val baseUrl = if (rawUrl.endsWith("/")) rawUrl else "$rawUrl/"
@@ -245,7 +246,6 @@ class AcademyRepository(private val context: Context) {
 
     suspend fun deleteAllTests() {
         academyDao.deleteAllTests()
-        syncWithSupabase { it.deleteAllTests() }
     }
 
     // === Questions ===
@@ -263,7 +263,6 @@ class AcademyRepository(private val context: Context) {
 
     suspend fun deleteAllQuestions() {
         academyDao.deleteAllQuestions()
-        syncWithSupabase { it.deleteAllQuestions() }
     }
 
     // === Test Scores ===
@@ -303,6 +302,40 @@ class AcademyRepository(private val context: Context) {
     suspend fun insertNotification(notification: NotificationEntity) {
         academyDao.insertNotification(notification)
         syncWithSupabase { it.insertNotification(toRequestBody(notification)) }
+    }
+
+    suspend fun sendGlobalNotification(title: String, message: String): Boolean {
+        val timestamp = System.currentTimeMillis()
+        val payload = mapOf(
+            "title" to title.trim(),
+            "message" to message.trim(),
+            "timestamp" to timestamp
+        )
+        return try {
+            val jsonStr = moshi.adapter(Map::class.java).toJson(payload)
+            val body = jsonStr.toRequestBody("application/json".toMediaTypeOrNull())
+            getApi().insertNotification(body)
+
+            val localEntity = NotificationEntity(
+                title = title.trim(),
+                message = message.trim(),
+                timestamp = timestamp
+            )
+            academyDao.insertNotification(localEntity)
+            Log.i("AcademyRepository", "[ALERT SYSTEM] Notification Saved to Supabase: Title='${title.trim()}'")
+            true
+        } catch (e: Exception) {
+            Log.e("AcademyRepository", "[ALERT SYSTEM] Errors sending notification: ${e.message}", e)
+            try {
+                val localEntity = NotificationEntity(
+                    title = title.trim(),
+                    message = message.trim(),
+                    timestamp = timestamp
+                )
+                academyDao.insertNotification(localEntity)
+            } catch (ignored: Exception) {}
+            false
+        }
     }
 
     // === Materials ===
@@ -346,6 +379,57 @@ class AcademyRepository(private val context: Context) {
 
     // === Study Websites ===
     val allStudyWebsites: Flow<List<StudyWebsiteEntity>> = academyDao.getAllStudyWebsites()
+
+    // === Study Website Favorites (Pure Local SharedPreferences) ===
+    private val favoriteIdsFlowMap = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.flow.MutableStateFlow<List<String>>>()
+
+    private fun getFavoriteIdsFlowForUser(userEmail: String): kotlinx.coroutines.flow.MutableStateFlow<List<String>> {
+        val email = userEmail.ifBlank { "guest" }
+        return favoriteIdsFlowMap.getOrPut(email) {
+            val sharedPrefs = context.getSharedPreferences("study_website_favorites_local", Context.MODE_PRIVATE)
+            val csv = sharedPrefs.getString("favs_$email", "") ?: ""
+            val list = if (csv.isBlank()) emptyList<String>() else csv.split(",")
+            kotlinx.coroutines.flow.MutableStateFlow(list)
+        }
+    }
+
+    fun getFavoriteStudyWebsites(userEmail: String): Flow<List<StudyWebsiteEntity>> {
+        val email = userEmail.ifBlank { "guest" }
+        val idsFlow = getFavoriteIdsFlowForUser(email)
+        return combine(allStudyWebsites, idsFlow) { websites, favoriteIds ->
+            val websiteMap = websites.associateBy { it.id }
+            favoriteIds.mapNotNull { websiteMap[it] }
+        }
+    }
+
+    fun getFavoriteWebsiteIds(userEmail: String): Flow<List<String>> {
+        val email = userEmail.ifBlank { "guest" }
+        return getFavoriteIdsFlowForUser(email)
+    }
+
+    suspend fun addStudyWebsiteFavorite(userEmail: String, websiteId: String) {
+        val email = userEmail.ifBlank { "guest" }
+        val sharedPrefs = context.getSharedPreferences("study_website_favorites_local", Context.MODE_PRIVATE)
+        val csv = sharedPrefs.getString("favs_$email", "") ?: ""
+        val list = if (csv.isBlank()) emptyList() else csv.split(",")
+        val updatedList = (list.filter { it != websiteId } + websiteId)
+        val newCsv = updatedList.joinToString(",")
+        sharedPrefs.edit().putString("favs_$email", newCsv).apply()
+        
+        getFavoriteIdsFlowForUser(email).value = updatedList
+    }
+
+    suspend fun removeStudyWebsiteFavorite(userEmail: String, websiteId: String) {
+        val email = userEmail.ifBlank { "guest" }
+        val sharedPrefs = context.getSharedPreferences("study_website_favorites_local", Context.MODE_PRIVATE)
+        val csv = sharedPrefs.getString("favs_$email", "") ?: ""
+        val list = if (csv.isBlank()) emptyList() else csv.split(",")
+        val updatedList = list.filter { it != websiteId }
+        val newCsv = updatedList.joinToString(",")
+        sharedPrefs.edit().putString("favs_$email", newCsv).apply()
+        
+        getFavoriteIdsFlowForUser(email).value = updatedList
+    }
 
     suspend fun insertStudyWebsite(website: StudyWebsiteEntity) {
         academyDao.insertStudyWebsite(website)
@@ -816,14 +900,50 @@ data class SupabaseLiveClassResult(
     }
 
     suspend fun getLatestAppUpdate(): AppUpdateEntity? {
-        Log.d("AcademyRepository", "Checking latest app update from Supabase...")
+        Log.d("AcademyRepository", "[UPDATE SYSTEM] Fetching latest app update from Supabase...")
         return try {
-            val api = getApi()
-            val updates = api.getAppUpdates()
-            Log.d("AcademyRepository", "Supabase returned ${updates.size} app updates.")
-            updates.firstOrNull()
+            val creds = R2SupabaseManager.getCredentials(context)
+            val rawUrl = if (creds.supabaseUrl.isNotBlank()) creds.cleanBaseUrl else "https://dummy.supabase.co"
+            val baseUrl = if (rawUrl.endsWith("/")) rawUrl else "$rawUrl/"
+            val requestUrl = "${baseUrl}rest/v1/app_update?select=*"
+
+            Log.d("AcademyRepository", "[UPDATE SYSTEM] Supabase Request URL: $requestUrl")
+            Log.d("AcademyRepository", "[UPDATE SYSTEM] Using Supabase Anon Key prefix: ${creds.supabaseAnonKey.take(10)}...")
+
+            val request = okhttp3.Request.Builder()
+                .url(requestUrl)
+                .addHeader("apikey", creds.supabaseAnonKey)
+                .addHeader("Authorization", "Bearer ${creds.supabaseAnonKey}")
+                .addHeader("Prefer", "return=representation")
+                .get()
+                .build()
+
+            val response = getOkHttpClient().newCall(request).execute()
+            val code = response.code
+            val bodyString = response.body?.string() ?: ""
+
+            Log.i("AcademyRepository", "[UPDATE SYSTEM] Supabase API Status Code: $code")
+            Log.i("AcademyRepository", "[UPDATE SYSTEM] Supabase API Raw Response Body: $bodyString")
+
+            if (!response.isSuccessful) {
+                Log.e("AcademyRepository", "[UPDATE SYSTEM] Supabase request failed with HTTP $code: $bodyString")
+                return null
+            }
+
+            val type = com.squareup.moshi.Types.newParameterizedType(List::class.java, AppUpdateEntity::class.java)
+            val adapter = moshi.adapter<List<AppUpdateEntity>>(type)
+            val updates = adapter.fromJson(bodyString)
+
+            Log.i("AcademyRepository", "[UPDATE SYSTEM] JSON Parsing success -> Found ${updates?.size ?: 0} entries in app_update.")
+            val latest = updates?.firstOrNull()
+            if (latest != null) {
+                Log.i("AcademyRepository", "[UPDATE SYSTEM] Parsed Entity -> ID: ${latest.id}, LatestVersion: '${latest.safeLatestVersion}', MinVersion: '${latest.safeMinimumVersion}', ForceUpdate: ${latest.isForceUpdate}, ApkUrl: '${latest.safeApkUrl}'")
+            } else {
+                Log.w("AcademyRepository", "[UPDATE SYSTEM] app_update table returned empty list []. No update records present.")
+            }
+            latest
         } catch (e: Exception) {
-            Log.e("AcademyRepository", "Failed to retrieve latest app update: ${e.message}", e)
+            Log.e("AcademyRepository", "[UPDATE SYSTEM] Exception while fetching app update: ${e.message}", e)
             null
         }
     }

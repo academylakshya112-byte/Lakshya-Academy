@@ -235,9 +235,11 @@ fun PremiumSplashScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     AsyncImage(
-                        model = R.drawable.lakshya_ghazipur_hd_1785220211284,
-                        contentDescription = "Lakshya Academy Logo",
-                        modifier = Modifier.fillMaxSize().scale(1.4f),
+                        model = R.drawable.img_shadow_x_rahul_logo_1785913560267,
+                        contentDescription = "SHADOW X RAHUL Logo",
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(CircleShape),
                         contentScale = ContentScale.Crop
                     )
 
@@ -429,10 +431,10 @@ fun PremiumSplashScreen(
 
             Spacer(modifier = Modifier.height(28.dp))
 
-            // 4. Lakshya Academy Title
+            // 4. SHADOW X RAHUL Title
             Text(
-                text = "LAKSHYA ACADEMY",
-                fontSize = 29.sp,
+                text = "SHADOW X RAHUL",
+                fontSize = 28.sp,
                 fontWeight = FontWeight.ExtraBold,
                 color = Color.White,
                 textAlign = TextAlign.Center,
@@ -462,17 +464,17 @@ fun PremiumSplashScreen(
                     )
             )
 
-            // 5. Sirgitha Subtitle
+            // 5. Study Portal Subtitle
             Text(
-                text = "SIRGITHA",
-                fontSize = 15.sp,
+                text = "STUDY PORTAL",
+                fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = Color(0xFFFFD700), // Gold Honors Accent
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .offset(y = subtitleSlideY.value.dp)
                     .alpha(subtitleAlpha.value),
-                letterSpacing = 8.sp
+                letterSpacing = 6.sp
             )
         }
     }

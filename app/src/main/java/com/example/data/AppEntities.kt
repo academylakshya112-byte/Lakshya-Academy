@@ -20,13 +20,13 @@ data class CourseEntity(
 @Entity(tableName = "lessons")
 data class LessonEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
-    @Json(name = "course_id") val courseId: Int,
-    @Json(name = "chapter_name") val chapterName: String,
-    val title: String,
-    @Json(name = "video_url") val videoUrl: String,
+    @Json(name = "course_id") val courseId: Int? = 0,
+    @Json(name = "chapter_name") val chapterName: String = "",
+    val title: String = "",
+    @Json(name = "video_url") val videoUrl: String = "",
     val folder: String = "General", // e.g. "All video", "PDF Notes"
-    @Json(name = "pdf_url") val pdfUrl: String,
-    @Json(name = "pdf_name") val pdfName: String,
+    @Json(name = "pdf_url") val pdfUrl: String = "",
+    @Json(name = "pdf_name") val pdfName: String = "",
     @Json(name = "pdf_content") val pdfContent: String = "",
     @Json(name = "file_size") val fileSize: String = "2.5 MB",
     @Json(name = "thumbnail_url") val thumbnailUrl: String = "",
@@ -432,6 +432,37 @@ data class CommunityPopupEntity(
     @Json(name = "created_at") val createdAt: String? = null,
     @Json(name = "updated_at") val updatedAt: String? = null
 )
+
+@Entity(tableName = "study_progress")
+data class StudyProgressDto(
+    @PrimaryKey(autoGenerate = true) val id: Int? = null,
+    @Json(name = "user_email") val userEmail: String? = null,
+    val date: String? = null,
+    @Json(name = "total_seconds") val totalSeconds: Int? = 0,
+    @Json(name = "daily_goal_minutes") val dailyGoalMinutes: Int? = 45,
+    @Json(name = "live_classes_seconds") val liveClassesSeconds: Int? = 0,
+    @Json(name = "course_syllabus_seconds") val courseSyllabusSeconds: Int? = 0,
+    @Json(name = "ai_coach_seconds") val aiCoachSeconds: Int? = 0,
+    @Json(name = "current_affairs_seconds") val currentAffairsSeconds: Int? = 0,
+    @Json(name = "test_series_seconds") val testSeriesSeconds: Int? = 0,
+    @Json(name = "previous_papers_seconds") val previousPapersSeconds: Int? = 0,
+    @Json(name = "exam_alerts_seconds") val examAlertsSeconds: Int? = 0,
+    @Json(name = "free_books_seconds") val freeBooksSeconds: Int? = 0,
+    @Json(name = "time_table_seconds") val timeTableSeconds: Int? = 0,
+    @Json(name = "study_websites_seconds") val studyWebsitesSeconds: Int? = 0,
+    @Json(name = "updated_at") val updatedAt: String? = null
+)
+
+@Entity(
+    tableName = "study_website_favorites",
+    primaryKeys = ["userEmail", "websiteId"]
+)
+data class StudyWebsiteFavoriteEntity(
+    val userEmail: String,
+    val websiteId: String,
+    val favoritedAt: Long = System.currentTimeMillis()
+)
+
 
 
 

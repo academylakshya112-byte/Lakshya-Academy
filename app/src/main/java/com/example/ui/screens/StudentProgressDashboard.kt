@@ -55,8 +55,11 @@ fun StudentProgressDashboard(
 
     var showGoalDialog by remember { mutableStateOf(false) }
 
-    // Periodic state updater
-    LaunchedEffect(Unit) {
+    // Periodic state updater and Supabase fetch
+    LaunchedEffect(userEmail) {
+        if (userEmail.isNotBlank()) {
+            StudyTracker.fetchAndMergeFromSupabase(context, userEmail)
+        }
         while (true) {
             delay(2000L) // Refresh every 2 seconds for immediate feedback
             todaySec = StudyTracker.getTodayStudySeconds(context)
@@ -351,61 +354,100 @@ fun StudentProgressDashboard(
                 }
             }
 
-            // Study Time Summaries Row (Daily / Weekly / Monthly)
+            // Study Time Summaries Row (Daily / Weekly / Monthly / Total)
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    // Weekly Summary Card
-                    Card(
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Icon(
-                                Icons.Default.DateRange,
-                                contentDescription = "Weekly",
-                                tint = Color(0xFF3B82F6),
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("Weekly Study", color = Color.Gray, fontSize = 12.sp)
-                            Text(
-                                "$weeklyMin mins",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp,
-                                color = Color.Black
-                            )
-                            Text("Last 7 days", color = Color.Gray, fontSize = 10.sp)
+                        // Weekly Summary Card
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Icon(
+                                    Icons.Default.DateRange,
+                                    contentDescription = "Weekly",
+                                    tint = Color(0xFF3B82F6),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("Weekly Study", color = Color.Gray, fontSize = 12.sp)
+                                Text(
+                                    "$weeklyMin mins",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = Color.Black
+                                )
+                                Text("Last 7 days", color = Color.Gray, fontSize = 10.sp)
+                            }
+                        }
+
+                        // Monthly Summary Card
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Icon(
+                                    Icons.Default.CalendarMonth,
+                                    contentDescription = "Monthly",
+                                    tint = Color(0xFF10B981),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("Monthly Study", color = Color.Gray, fontSize = 12.sp)
+                                Text(
+                                    "$monthlyMin mins",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = Color.Black
+                                )
+                                Text("Last 30 days", color = Color.Gray, fontSize = 10.sp)
+                            }
                         }
                     }
 
-                    // Monthly Summary Card
+                    // Total All-Time Study Time Card
+                    val totalAllTimeMin = remember(todaySec, weeklyMin) { StudyTracker.getTotalStudyMinutesAllTime(context) }
                     Card(
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
                         colors = CardDefaults.cardColors(containerColor = Color.White),
                         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
                     ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Icon(
-                                Icons.Default.CalendarMonth,
-                                contentDescription = "Monthly",
-                                tint = Color(0xFF10B981),
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("Monthly Study", color = Color.Gray, fontSize = 12.sp)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.Schedule,
+                                    contentDescription = "Total Study Time",
+                                    tint = Color(0xFF8B5CF6),
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text("Total Study Time", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Text("All-time active study duration", color = Color.Gray, fontSize = 11.sp)
+                                }
+                            }
                             Text(
-                                "$monthlyMin mins",
+                                text = if (totalAllTimeMin >= 60) "${totalAllTimeMin / 60}h ${totalAllTimeMin % 60}m" else "$totalAllTimeMin mins",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 16.sp,
-                                color = Color.Black
+                                color = Color(0xFF8B5CF6)
                             )
-                            Text("Last 30 days", color = Color.Gray, fontSize = 10.sp)
                         }
                     }
                 }
@@ -485,6 +527,78 @@ fun StudentProgressDashboard(
                                             fontWeight = FontWeight.SemiBold
                                         )
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Module Analytics Breakdowns Card
+            item {
+                val modulesList = listOf(
+                    Pair("Live Classes", StudyTracker.MODULE_LIVE_CLASSES),
+                    Pair("Course Syllabus", StudyTracker.MODULE_COURSE_SYLLABUS),
+                    Pair("Lakshya AI Coach", StudyTracker.MODULE_AI_COACH),
+                    Pair("Current Affairs", StudyTracker.MODULE_CURRENT_AFFAIRS),
+                    Pair("Test Series", StudyTracker.MODULE_TEST_SERIES),
+                    Pair("Previous Papers", StudyTracker.MODULE_PREVIOUS_PAPERS),
+                    Pair("Exam Alerts", StudyTracker.MODULE_EXAM_ALERTS),
+                    Pair("Free Books", StudyTracker.MODULE_FREE_BOOKS),
+                    Pair("Time Table", StudyTracker.MODULE_TIME_TABLE),
+                    Pair("Study Apps", StudyTracker.MODULE_STUDY_WEBSITES)
+                )
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Category,
+                                contentDescription = "Module Analytics",
+                                tint = BrandBluePrimary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Module Analytics",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            modulesList.forEach { (label, keyName) ->
+                                val seconds = remember(todaySec) { StudyTracker.getModuleStudySeconds(context, keyName) }
+                                val mins = seconds / 60
+                                val secRem = seconds % 60
+                                val displayTime = if (mins > 0) "${mins}m ${secRem}s" else "${seconds}s"
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(Color(0xFFF8FAFC), RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color.Black
+                                    )
+                                    Text(
+                                        text = displayTime,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (seconds > 0) BrandBluePrimary else Color.Gray
+                                    )
                                 }
                             }
                         }
@@ -843,9 +957,9 @@ fun StudentProgressDashboard(
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        listOf(30, 45, 60, 90, 120).forEach { mins ->
+                        listOf(15, 30, 45, 60, 90, 120).forEach { mins ->
                             Button(
                                 onClick = { tempGoal = mins.toString() },
                                 modifier = Modifier.weight(1f),
@@ -856,7 +970,7 @@ fun StudentProgressDashboard(
                                     contentColor = if (tempGoal == mins.toString()) Color.White else Color.Black
                                 )
                             ) {
-                                Text("$mins m", fontSize = 11.sp)
+                                Text("$mins m", fontSize = 10.sp)
                             }
                         }
                     }

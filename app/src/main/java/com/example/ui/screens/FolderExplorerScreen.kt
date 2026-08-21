@@ -101,6 +101,13 @@ fun FolderExplorerContent(
     viewModel: AcademyViewModel,
     onClose: () -> Unit
 ) {
+    val moduleTrackerName = when (module) {
+        FolderModule.SYLLABUS -> com.example.util.StudyTracker.MODULE_COURSE_SYLLABUS
+        FolderModule.PREVIOUS_PAPERS -> com.example.util.StudyTracker.MODULE_PREVIOUS_PAPERS
+        FolderModule.FREE_BOOKS -> com.example.util.StudyTracker.MODULE_FREE_BOOKS
+    }
+    com.example.util.TrackStudyModule(moduleTrackerName)
+
     val context = LocalContext.current
     val isAdmin = (viewModel.currentUser?.role == "ADMIN")
 
@@ -1217,12 +1224,25 @@ fun InAppPdfViewerDialog(
                     IconButton(onClick = {
                         try {
                             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                            val request = android.app.DownloadManager.Request(Uri.parse(pdfFile.storageUrl))
-                                .setTitle(pdfFile.fileName)
-                                .setDescription("Downloading PDF")
-                                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                                .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, pdfFile.fileName)
-                            dm.enqueue(request)
+                            val uri = Uri.parse(pdfFile.storageUrl)
+                            val buildReq = { usePublicDir: Boolean ->
+                                android.app.DownloadManager.Request(uri)
+                                    .setTitle(pdfFile.fileName)
+                                    .setDescription("Downloading PDF")
+                                    .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                                    .apply {
+                                        if (usePublicDir) {
+                                            setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, pdfFile.fileName)
+                                        } else {
+                                            setDestinationInExternalFilesDir(context, android.os.Environment.DIRECTORY_DOWNLOADS, pdfFile.fileName)
+                                        }
+                                    }
+                            }
+                            try {
+                                dm.enqueue(buildReq(true))
+                            } catch (ex: Exception) {
+                                dm.enqueue(buildReq(false))
+                            }
                             Toast.makeText(context, "Download started!", Toast.LENGTH_SHORT).show()
                         } catch (e: Exception) {
                             Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -1416,12 +1436,25 @@ fun InAppImageGalleryDialog(
                         if (currentFile != null) {
                             try {
                                 val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                                val request = android.app.DownloadManager.Request(Uri.parse(currentFile.storageUrl))
-                                    .setTitle(currentFile.fileName)
-                                    .setDescription("Downloading Image")
-                                    .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                                    .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, currentFile.fileName)
-                                dm.enqueue(request)
+                                val uri = Uri.parse(currentFile.storageUrl)
+                                val buildReq = { usePublicDir: Boolean ->
+                                    android.app.DownloadManager.Request(uri)
+                                        .setTitle(currentFile.fileName)
+                                        .setDescription("Downloading Image")
+                                        .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                                        .apply {
+                                            if (usePublicDir) {
+                                                setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, currentFile.fileName)
+                                            } else {
+                                                setDestinationInExternalFilesDir(context, android.os.Environment.DIRECTORY_DOWNLOADS, currentFile.fileName)
+                                            }
+                                        }
+                                }
+                                try {
+                                    dm.enqueue(buildReq(true))
+                                } catch (ex: Exception) {
+                                    dm.enqueue(buildReq(false))
+                                }
                                 Toast.makeText(context, "Download started!", Toast.LENGTH_SHORT).show()
                             } catch (e: Exception) {
                                 Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()

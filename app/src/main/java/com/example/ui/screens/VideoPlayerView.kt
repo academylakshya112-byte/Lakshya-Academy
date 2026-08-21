@@ -217,14 +217,17 @@ fun YouTubePlayer(
 
     if (customView != null) {
         AndroidView(
-            factory = { customView!! },
+            factory = { ctx ->
+                (customView?.parent as? android.view.ViewGroup)?.removeView(customView)
+                customView!!
+            },
             modifier = Modifier.fillMaxSize()
         )
     } else {
         AndroidView(
             factory = { ctx ->
                 android.webkit.WebView(ctx).apply {
-                    setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                    setLayerType(android.view.View.LAYER_TYPE_NONE, null)
 
                     val cookieManager = android.webkit.CookieManager.getInstance()
                     cookieManager.setAcceptCookie(true)
@@ -1053,7 +1056,7 @@ fun StandardVideoPlayer(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "${lesson.chapterName} • ${lesson.folder} • Class Batch #${lesson.courseId}",
+                            text = "${lesson.chapterName} • ${lesson.folder} • Class Batch #${lesson.courseId ?: 0}",
                             color = Color.LightGray,
                             fontSize = 11.sp,
                             maxLines = 1,

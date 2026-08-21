@@ -193,23 +193,23 @@ fun AuthScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     AsyncImage(
-                        model = R.drawable.lakshya_ghazipur_hd_1785220211284,
-                        contentDescription = "Lakshya Logo",
+                        model = R.drawable.img_shadow_x_rahul_logo_1785913560267,
+                        contentDescription = "SHADOW X RAHUL Logo",
                         modifier = Modifier
                             .fillMaxSize()
-                            .scale(1.4f),
+                            .clip(CircleShape),
                         contentScale = ContentScale.Crop
                     )
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "Lakshya Academy",
+                    text = "SHADOW X RAHUL",
                     fontSize = 28.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color.White
                 )
                 Text(
-                    text = "Ghazipur • Competitive Prep Center",
+                    text = "Study Portal • Premium Prep",
                     fontSize = 14.sp,
                     color = Color.White.copy(alpha = 0.85f)
                 )

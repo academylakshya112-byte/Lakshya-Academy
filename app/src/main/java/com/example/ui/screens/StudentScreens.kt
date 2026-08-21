@@ -56,7 +56,7 @@ fun Academic3x3GridDashboard(onTabSelect: (String) -> Unit) {
         Triple("My Progress", Icons.Default.Leaderboard, "DASHBOARD"),
         Triple("Free Books", Icons.Default.AutoStories, "books"),
         Triple("Time Table", Icons.Default.CalendarMonth, "timetable"),
-        Triple("Study Websites", Icons.Default.Language, "study_websites")
+        Triple("Study Apps", Icons.Default.Language, "study_websites")
     )
 
     Column(

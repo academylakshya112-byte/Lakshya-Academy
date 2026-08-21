@@ -46,16 +46,30 @@ fun downloadPdfFromUri(context: android.content.Context, pdfUriString: String, p
         
         val downloadManager = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
         val uri = Uri.parse(pdfUriString)
-        val request = android.app.DownloadManager.Request(uri)
-            .setTitle(fileName)
-            .setDescription("Downloading PDF...")
-            .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
-            .setMimeType("application/pdf")
-            .setAllowedOverMetered(true)
-            .setAllowedOverRoaming(true)
         
-        downloadManager.enqueue(request)
+        val buildReq = { usePublicDir: Boolean ->
+            android.app.DownloadManager.Request(uri)
+                .setTitle(fileName)
+                .setDescription("Downloading PDF...")
+                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setMimeType("application/pdf")
+                .setAllowedOverMetered(true)
+                .setAllowedOverRoaming(true)
+                .apply {
+                    if (usePublicDir) {
+                        setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
+                    } else {
+                        setDestinationInExternalFilesDir(context, android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
+                    }
+                }
+        }
+
+        try {
+            downloadManager.enqueue(buildReq(true))
+        } catch (ex: Exception) {
+            downloadManager.enqueue(buildReq(false))
+        }
+        
         Toast.makeText(context, "Download started: $fileName", Toast.LENGTH_SHORT).show()
     } catch (e: Exception) {
         e.printStackTrace()

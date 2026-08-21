@@ -73,6 +73,35 @@ fun MainAppScreen(
 
     var showSplash by remember { mutableStateOf(true) }
 
+    // Alert System lifecycle observer and popup handler
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_START, androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
+                    viewModel.alertSystemManager.startPolling()
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_STOP, androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> {
+                    viewModel.alertSystemManager.stopPolling()
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            viewModel.alertSystemManager.stopPolling()
+        }
+    }
+
+    val activeAlertPopup by viewModel.alertSystemManager.activePopupNotification.collectAsStateWithLifecycle()
+    if (activeAlertPopup != null) {
+        AlertNotificationPopupDialog(
+            notification = activeAlertPopup!!,
+            onDismiss = { viewModel.alertSystemManager.dismissPopup() }
+        )
+    }
+
     MyApplicationTheme(darkTheme = darkTheme) {
         Surface(
             modifier = modifier.fillMaxSize(),
@@ -195,7 +224,8 @@ fun StudentMainContainer(viewModel: AcademyViewModel) {
                     "study_websites" -> StudentStudyWebsitesScreen(
                         viewModel = viewModel,
                         onOpenWebsite = { activeWebViewUrl = it },
-                        onBack = { studentTab = "home" }
+                        onBack = { studentTab = "home" },
+                        onNavigateTab = { studentTab = it }
                     )
                     "profile" -> StudentProfileView(viewModel = viewModel)
                     "TESTS" -> StudentTestHub(viewModel = viewModel)
@@ -212,6 +242,10 @@ fun StudentMainContainer(viewModel: AcademyViewModel) {
                         }
                     )
                     "firebase_auth" -> FirebaseLoginScreen(onBack = { studentTab = "home" })
+                    "ALERTS" -> NotificationHistoryScreen(
+                        viewModel = viewModel,
+                        onBack = { studentTab = "home" }
+                    )
                 }
             }
         }
@@ -272,11 +306,11 @@ fun AdminTopAnnouncer(logout: () -> Unit) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(modifier = Modifier.size(36.dp).clip(CircleShape).background(Color.White)) {
-                    AsyncImage(model = R.drawable.lakshya_ghazipur_hd_1785220211284, contentDescription = null, modifier = Modifier.fillMaxSize().scale(1.4f), contentScale = ContentScale.Crop)
+                    AsyncImage(model = R.drawable.img_shadow_x_rahul_logo_1785913560267, contentDescription = null, modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
                 }
                 Spacer(modifier = Modifier.width(10.dp))
                 Column {
-                    Text("Lakshya Admin", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("SHADOW X RAHUL Admin", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     Text("Session 2026", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp)
                 }
             }
@@ -286,18 +320,35 @@ fun AdminTopAnnouncer(logout: () -> Unit) {
 }
 
 @Composable
-fun DashboardBrandHeader(studentName: String, photoUri: String = "") {
+fun DashboardBrandHeader(
+    studentName: String,
+    photoUri: String = "",
+    onNotificationClick: (() -> Unit)? = null
+) {
     Card(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
         Row(modifier = Modifier.fillMaxWidth().padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("Lakshya Academy", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                Text("SHADOW X RAHUL", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 Text("Namaste $studentName! 👋", fontSize = 22.sp, fontWeight = FontWeight.Black)
+            }
+            if (onNotificationClick != null) {
+                IconButton(
+                    onClick = onNotificationClick,
+                    modifier = Modifier.padding(end = 8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.NotificationsActive,
+                        contentDescription = "Notifications",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
             }
             Box(modifier = Modifier.size(60.dp).clip(CircleShape).background(Color.White).border(1.5.dp, MaterialTheme.colorScheme.primary, CircleShape), contentAlignment = Alignment.Center) {
                 if (photoUri.isNotBlank()) {
                     AsyncImage(model = photoUri, contentDescription = "Profile Photo", modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
                 } else {
-                    AsyncImage(model = R.drawable.lakshya_ghazipur_hd_1785220211284, contentDescription = null, modifier = Modifier.fillMaxSize().scale(1.4f), contentScale = ContentScale.Crop)
+                    AsyncImage(model = R.drawable.img_shadow_x_rahul_logo_1785913560267, contentDescription = null, modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
                 }
             }
         }
@@ -837,6 +888,8 @@ fun LessonSelectionRow(lesson: LessonEntity, onSelect: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StudentTestHub(viewModel: AcademyViewModel) {
+    com.example.util.TrackStudyModule(com.example.util.StudyTracker.MODULE_TEST_SERIES)
+
     val activeTestProgress = viewModel.activeTestProgress
     
     if (activeTestProgress != null) {
@@ -1736,24 +1789,6 @@ fun StudentProfileView(viewModel: AcademyViewModel) {
                 Text("Contact Support & Info", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF6366F1))
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), thickness = 0.5.dp)
                 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Phone, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text("Mobile Number", fontSize = 12.sp, color = Color.Gray)
-                        Text(user.mobile.ifBlank { "+91 8090756962" }, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    }
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Email, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text("Email Address", fontSize = 12.sp, color = Color.Gray)
-                        Text("academylakshya112@gmail.com", fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    }
-                }
-                Spacer(modifier = Modifier.height(16.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.SupervisorAccount, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(12.dp))

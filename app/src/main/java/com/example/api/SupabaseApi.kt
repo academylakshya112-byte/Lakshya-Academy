@@ -150,7 +150,7 @@ interface SupabaseApi {
     @POST("rest/v1/video_views")
     suspend fun insertVideoView(@Body body: RequestBody): List<VideoViewDto>
 
-    @GET("rest/v1/app_update?select=*&order=updated_at.desc")
+    @GET("rest/v1/app_update?select=*&order=id.desc")
     suspend fun getAppUpdates(): List<AppUpdateEntity>
 
     // --- Supabase GoTrue Auth Endpoints ---
@@ -199,5 +199,29 @@ interface SupabaseApi {
     @Headers("Prefer: return=representation", "Content-Type: application/json")
     @PATCH("rest/v1/community_popup")
     suspend fun updateCommunityPopup(@Query("id") idFilter: String, @Body body: RequestBody): retrofit2.Response<okhttp3.ResponseBody>
+
+    // --- Study Progress Endpoints ---
+    @GET("rest/v1/study_progress?select=*")
+    suspend fun getStudyProgressForUser(
+        @Query("user_email") userEmailFilter: String
+    ): List<com.example.data.StudyProgressDto>
+
+    @GET("rest/v1/study_progress?select=*")
+    suspend fun getStudyProgressForUserAndDate(
+        @Query("user_email") userEmailFilter: String,
+        @Query("date") dateFilter: String
+    ): List<com.example.data.StudyProgressDto>
+
+    @Headers("Prefer: return=representation", "Content-Type: application/json")
+    @POST("rest/v1/study_progress")
+    suspend fun insertStudyProgress(@Body body: RequestBody): retrofit2.Response<okhttp3.ResponseBody>
+
+    @Headers("Prefer: return=representation", "Content-Type: application/json")
+    @PATCH("rest/v1/study_progress")
+    suspend fun updateStudyProgress(
+        @Query("user_email") userEmailFilter: String,
+        @Query("date") dateFilter: String,
+        @Body body: RequestBody
+    ): retrofit2.Response<okhttp3.ResponseBody>
 }
 

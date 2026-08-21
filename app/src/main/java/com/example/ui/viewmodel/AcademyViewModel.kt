@@ -19,6 +19,7 @@ import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlin.coroutines.resume
@@ -212,6 +213,7 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
 
     val appUpdateManager = com.example.util.AppUpdateManager(application.applicationContext)
     val repository = AcademyRepository(application.applicationContext)
+    val alertSystemManager = com.example.util.AlertSystemManager(application.applicationContext, repository.getApi(), repository.academyDao)
     private val prefs = application.getSharedPreferences("lakshya_app_prefs", android.content.Context.MODE_PRIVATE)
 
     // --- Authentication State ---
@@ -472,6 +474,10 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         }
         */
 
+        viewModelScope.launch(Dispatchers.IO) {
+            checkForUpdates()
+        }
+
         viewModelScope.launch {
             try {
                 repository.deleteAllTests()
@@ -480,7 +486,6 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
                 android.util.Log.e("AcademyViewModel", "Error clearing tests/questions on init: ${e.message}")
             }
             repository.syncAllFromRemote()
-            checkForUpdates()
         }
         // Load dynamically registered users
         try {
@@ -1364,43 +1369,82 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun checkForUpdates() {
-        viewModelScope.launch {
+    private var hasCheckedUpdateThisSession = false
+
+    fun checkForUpdates(forceRecheck: Boolean = false) {
+        if (hasCheckedUpdateThisSession && !forceRecheck) {
+            android.util.Log.d("AcademyViewModel", "[UPDATE SYSTEM] Skipping update check - already executed in this session.")
+            return
+        }
+        hasCheckedUpdateThisSession = true
+
+        viewModelScope.launch(Dispatchers.IO) {
             try {
-                android.util.Log.d("AcademyViewModel", "[UPDATE SYSTEM] Checking for updates from Supabase...")
+                android.util.Log.d("AcademyViewModel", "[UPDATE SYSTEM] Starting update check sequence from Supabase...")
+
+                // 1. Get installed version name and code
+                val installedVersion = try {
+                    com.example.BuildConfig.VERSION_NAME.ifBlank {
+                        val context = getApplication<Application>()
+                        val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+                        pInfo.versionName ?: "1.0.0"
+                    }
+                } catch (e: Exception) {
+                    "1.0.0"
+                }
+                val installedVersionCode = com.example.BuildConfig.VERSION_CODE
+
+                android.util.Log.i("AcademyViewModel", "[UPDATE SYSTEM] Installed App Version: '$installedVersion' (versionCode=$installedVersionCode)")
+
+                // 2. Fetch latest app update record from Supabase table
                 val latestUpdate = repository.getLatestAppUpdate()
                 if (latestUpdate == null) {
-                    android.util.Log.d("AcademyViewModel", "[UPDATE SYSTEM] No update details found in database.")
+                    android.util.Log.w("AcademyViewModel", "[UPDATE SYSTEM] Result: No update record returned from Supabase database.")
                     appUpdateManager.setIdle()
                     return@launch
                 }
-                
-                val context = getApplication<Application>()
-                val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-                val installedVersion = pInfo.versionName ?: "1.0"
-                
-                android.util.Log.d("AcademyViewModel", "[UPDATE SYSTEM] Installed Version: $installedVersion, Latest: ${latestUpdate.latestVersion}, Minimum: ${latestUpdate.minimumVersion}")
-                
-                val hasNewer = compareVersions(latestUpdate.latestVersion, installedVersion) > 0
-                val isBelowMin = compareVersions(installedVersion, latestUpdate.minimumVersion) < 0
-                val isForce = latestUpdate.forceUpdate || isBelowMin
-                
-                if (hasNewer) {
-                    android.util.Log.i("AcademyViewModel", "[UPDATE SYSTEM] New version available! Force Update: $isForce")
+
+                val remoteLatestVersion = latestUpdate.safeLatestVersion
+                val remoteMinimumVersion = latestUpdate.safeMinimumVersion
+                val remoteForceUpdate = latestUpdate.isForceUpdate
+                val remoteApkUrl = latestUpdate.safeApkUrl
+                val remoteReleaseNotes = latestUpdate.safeReleaseNotes
+
+                android.util.Log.i(
+                    "AcademyViewModel",
+                    "[UPDATE SYSTEM] Remote Data -> LatestVersion: '$remoteLatestVersion', MinimumVersion: '$remoteMinimumVersion', ForceUpdateFlag: $remoteForceUpdate, ApkUrl: '$remoteApkUrl', Notes: '${remoteReleaseNotes.take(30)}...'"
+                )
+
+                // 3. SemVer Version Comparison
+                val isLowerThanLatest = compareVersions(installedVersion, remoteLatestVersion) < 0
+                val isLowerThanMinimum = compareVersions(installedVersion, remoteMinimumVersion) < 0
+
+                android.util.Log.d(
+                    "AcademyViewModel",
+                    "[UPDATE SYSTEM] Version Analysis -> Installed: '$installedVersion', isLowerThanLatest: $isLowerThanLatest, isLowerThanMinimum: $isLowerThanMinimum"
+                )
+
+                val isForce = remoteForceUpdate || isLowerThanMinimum
+                val shouldShowPopup = isLowerThanLatest || isLowerThanMinimum
+
+                // 4. Update Popup Decision
+                if (shouldShowPopup) {
+                    android.util.Log.i("AcademyViewModel", "[UPDATE SYSTEM] Decision: Triggering Update Popup (Force Mode: $isForce)")
                     appUpdateManager.setUpdateAvailable(latestUpdate, isForce)
                 } else {
-                    android.util.Log.d("AcademyViewModel", "[UPDATE SYSTEM] Application is up-to-date.")
+                    android.util.Log.i("AcademyViewModel", "[UPDATE SYSTEM] Decision: App is up-to-date. Setting AppUpdateManager state to Idle.")
                     appUpdateManager.setIdle()
                 }
+
             } catch (e: Exception) {
-                android.util.Log.e("AcademyViewModel", "[UPDATE SYSTEM] Error checking for updates: ${e.message}", e)
+                android.util.Log.e("AcademyViewModel", "[UPDATE SYSTEM] Error during update check: ${e.message}", e)
             }
         }
     }
-    
+
     private fun compareVersions(v1: String, v2: String): Int {
-        val s1 = v1.split(".").mapNotNull { it.toIntOrNull() }
-        val s2 = v2.split(".").mapNotNull { it.toIntOrNull() }
+        val s1 = v1.replace(Regex("[^0-9.]"), "").split(".").mapNotNull { it.toIntOrNull() }
+        val s2 = v2.replace(Regex("[^0-9.]"), "").split(".").mapNotNull { it.toIntOrNull() }
         val maxLen = maxOf(s1.size, s2.size)
         for (i in 0 until maxLen) {
             val val1 = if (i < s1.size) s1[i] else 0
@@ -2703,16 +2747,22 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    suspend fun adminSendGlobalNotification(title: String, message: String): Boolean {
+        if (title.isBlank() || message.isBlank()) return false
+        val result = repository.sendGlobalNotification(title, message)
+        if (result) {
+            Log.i("AcademyViewModel", "[ALERT SYSTEM] Notification Saved: Title='${title.trim()}'")
+        } else {
+            Log.e("AcademyViewModel", "[ALERT SYSTEM] Errors sending global notification: Title='${title.trim()}'")
+        }
+        return result
+    }
+
     fun adminSendPushNotification(title: String, body: String) {
         if (currentUser?.role != "ADMIN") return
         if (title.isBlank() || body.isBlank()) return
         viewModelScope.launch {
-            repository.insertNotification(
-                NotificationEntity(
-                    title = title.trim(),
-                    message = body.trim()
-                )
-            )
+            adminSendGlobalNotification(title, body)
         }
     }
 
@@ -2838,6 +2888,28 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
             }
         }
         repository.syncAllFromRemote()
+    }
+
+    // === Student Study Website Favorites ===
+    fun getFavoriteStudyWebsites(userEmail: String): Flow<List<StudyWebsiteEntity>> {
+        val email = userEmail.ifBlank { "guest" }
+        return repository.getFavoriteStudyWebsites(email)
+    }
+
+    fun getFavoriteWebsiteIds(userEmail: String): Flow<List<String>> {
+        val email = userEmail.ifBlank { "guest" }
+        return repository.getFavoriteWebsiteIds(email)
+    }
+
+    fun toggleStudyWebsiteFavorite(userEmail: String, websiteId: String, isFavorite: Boolean) {
+        val email = userEmail.ifBlank { "guest" }
+        viewModelScope.launch {
+            if (isFavorite) {
+                repository.addStudyWebsiteFavorite(email, websiteId)
+            } else {
+                repository.removeStudyWebsiteFavorite(email, websiteId)
+            }
+        }
     }
 
     fun adminDeleteBanner(id: Int) {

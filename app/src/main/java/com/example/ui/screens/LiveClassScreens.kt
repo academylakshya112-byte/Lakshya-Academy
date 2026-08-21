@@ -144,6 +144,8 @@ fun LiveClassScreen(
     viewModel: AcademyViewModel,
     onBack: () -> Unit
 ) {
+    com.example.util.TrackStudyModule(com.example.util.StudyTracker.MODULE_LIVE_CLASSES)
+
     val liveClasses by viewModel.allLiveClasses.collectAsStateWithLifecycle(emptyList())
     var activeClassForPlayer by remember { mutableStateOf<LiveClassEntity?>(null) }
 
@@ -603,7 +605,7 @@ fun EmbeddedYoutubePlayer(
         factory = { ctx ->
             WebView(ctx).apply {
                 webViewRef.value = this
-                setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                setLayerType(android.view.View.LAYER_TYPE_NONE, null)
 
                 val cookieManager = android.webkit.CookieManager.getInstance()
                 cookieManager.setAcceptCookie(true)

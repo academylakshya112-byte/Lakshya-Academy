@@ -1370,6 +1370,7 @@ object R2SupabaseManager {
 
         val jsonBody = """
             {
+              "prefix": "",
               "limit": 100,
               "offset": 0,
               "sortBy": {

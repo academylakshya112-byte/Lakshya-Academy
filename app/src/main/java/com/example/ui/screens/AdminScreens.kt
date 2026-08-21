@@ -227,13 +227,65 @@ fun AdminNotificationAlerts(viewModel: AcademyViewModel) {
     val context = LocalContext.current
     var alertTitle by remember { mutableStateOf("") }
     var alertMsg by remember { mutableStateOf("") }
+    var isSending by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("Broadcast Push Alerts", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-        OutlinedTextField(value = alertTitle, onValueChange = { alertTitle = it }, label = { Text("Alert Heading") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = alertMsg, onValueChange = { alertMsg = it }, label = { Text("Detailed Message") }, modifier = Modifier.fillMaxWidth(), minLines = 3)
-        Button(onClick = { Toast.makeText(context, "Notifications Dispatched to all Students! 🔔", Toast.LENGTH_LONG).show() }, modifier = Modifier.align(Alignment.End).padding(top = 16.dp)) {
-            Text("Send Global Notification")
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = alertTitle,
+            onValueChange = { alertTitle = it },
+            label = { Text("Alert Heading") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !isSending,
+            singleLine = true
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = alertMsg,
+            onValueChange = { alertMsg = it },
+            label = { Text("Detailed Message") },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 3,
+            enabled = !isSending
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(
+            onClick = {
+                val title = alertTitle.trim()
+                val message = alertMsg.trim()
+                if (title.isBlank() || message.isBlank()) {
+                    Toast.makeText(context, "Please fill in both Alert Heading and Detailed Message", Toast.LENGTH_SHORT).show()
+                    return@Button
+                }
+                isSending = true
+                scope.launch {
+                    val success = viewModel.adminSendGlobalNotification(title, message)
+                    isSending = false
+                    if (success) {
+                        Toast.makeText(context, "Notification Sent Successfully", Toast.LENGTH_SHORT).show()
+                        alertTitle = ""
+                        alertMsg = ""
+                    } else {
+                        Toast.makeText(context, "Failed to send notification. Please check connection.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            enabled = !isSending && alertTitle.isNotBlank() && alertMsg.isNotBlank(),
+            modifier = Modifier.align(Alignment.End)
+        ) {
+            if (isSending) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    color = Color.White,
+                    strokeWidth = 2.dp
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Sending...")
+            } else {
+                Text("Send Global Notification")
+            }
         }
     }
 }

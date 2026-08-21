@@ -67,6 +67,8 @@ fun StudentR2VideosScreen(
     onBack: () -> Unit,
     onNavigateToDoubtSolver: ((String, String) -> Unit)? = null
 ) {
+    com.example.util.TrackStudyModule(com.example.util.StudyTracker.MODULE_COURSE_SYLLABUS)
+
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -2392,20 +2394,8 @@ fun R2BatchCard(
     var isFavorite by remember { mutableStateOf(false) }
     val displayImageUrl = remember(course.imageUrl, course.id, course.title) {
         when {
-            course.id == 7 || course.title.contains("AIRFORCE", ignoreCase = true) -> {
-                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/lms_1783610971221.jpg"
-            }
-            course.id == 10 || course.title.contains("9th Class", ignoreCase = true) || course.title.contains("9th", ignoreCase = true) -> {
-                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/WhatsApp%20Image%202026-07-11%20at%202.03.25%20PM.jpeg"
-            }
-            course.id == 11 || course.title.contains("12th", ignoreCase = true) -> {
-                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/12TH%20.jpeg"
-            }
-            course.id == 12 || course.title.contains("10th Class", ignoreCase = true) || course.title.contains("10th", ignoreCase = true) -> {
-                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/10TH%20.png"
-            }
-            course.id == 6 || course.title.contains("Toppers Batch", ignoreCase = true) || course.title.contains("PCB 11th Class", ignoreCase = true) -> {
-                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/lms_1783656408082.jpg"
+            course.id == 6 || course.title.contains("Refresh Your Mind", ignoreCase = true) -> {
+                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/WhatsApp%20Image%202026-08-10%20at%2012.29.02%20PM.jpeg"
             }
             else -> course.imageUrl
         }
@@ -2566,8 +2556,11 @@ private fun extractFileNameFromUrl(url: String, defaultName: String): String {
 }
 
 private fun checkIfFileExistsInDownloads(context: Context, fileName: String): Boolean {
-    val file = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), fileName)
-    if (file.exists()) return true
+    val filePublic = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), fileName)
+    if (filePublic.exists()) return true
+
+    val filePrivate = java.io.File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), fileName)
+    if (filePrivate.exists()) return true
 
     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
         val projection = arrayOf(android.provider.MediaStore.Downloads._ID)
@@ -2586,7 +2579,24 @@ private fun checkIfFileExistsInDownloads(context: Context, fileName: String): Bo
 }
 
 private fun getDownloadedFileContentUri(context: Context, fileName: String): Uri? {
-    val file = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), fileName)
+    val filePublic = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), fileName)
+    if (filePublic.exists()) {
+        return try {
+            androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", filePublic)
+        } catch (e: Exception) {
+            Uri.fromFile(filePublic)
+        }
+    }
+
+    val filePrivate = java.io.File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), fileName)
+    if (filePrivate.exists()) {
+        return try {
+            androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", filePrivate)
+        } catch (e: Exception) {
+            Uri.fromFile(filePrivate)
+        }
+    }
+
     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
         val projection = arrayOf(android.provider.MediaStore.Downloads._ID)
         val selection = "${android.provider.MediaStore.Downloads.DISPLAY_NAME} = ?"
@@ -2603,9 +2613,6 @@ private fun getDownloadedFileContentUri(context: Context, fileName: String): Uri
         } catch (e: Exception) {
             e.printStackTrace()
         }
-    }
-    if (file.exists()) {
-        return Uri.fromFile(file)
     }
     return null
 }
@@ -2758,7 +2765,7 @@ fun InAppPdfViewer(pdfUrl: String, title: String, onBack: () -> Unit) {
                 AndroidView(
                     factory = { ctx ->
                         android.webkit.WebView(ctx).apply {
-                            setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                            setLayerType(android.view.View.LAYER_TYPE_NONE, null)
                             android.webkit.CookieManager.getInstance().setAcceptCookie(true)
                             android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                             settings.apply {
@@ -2865,16 +2872,28 @@ fun InAppPdfViewer(pdfUrl: String, title: String, onBack: () -> Unit) {
                                     try {
                                         val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
                                         val uri = Uri.parse(pdfUrl)
-                                        val request = android.app.DownloadManager.Request(uri)
-                                            .setTitle(fileName)
-                                            .setDescription("Downloading PDF...")
-                                            .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                                            .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
-                                            .setMimeType("application/pdf")
-                                            .setAllowedOverMetered(true)
-                                            .setAllowedOverRoaming(true)
+                                        val buildReq = { usePublicDir: Boolean ->
+                                            android.app.DownloadManager.Request(uri)
+                                                .setTitle(fileName)
+                                                .setDescription("Downloading PDF...")
+                                                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                                                .setMimeType("application/pdf")
+                                                .setAllowedOverMetered(true)
+                                                .setAllowedOverRoaming(true)
+                                                .apply {
+                                                    if (usePublicDir) {
+                                                        setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
+                                                    } else {
+                                                        setDestinationInExternalFilesDir(context, android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
+                                                    }
+                                                }
+                                        }
                                         
-                                        downloadId = downloadManager.enqueue(request)
+                                        downloadId = try {
+                                            downloadManager.enqueue(buildReq(true))
+                                        } catch (ex: Exception) {
+                                            downloadManager.enqueue(buildReq(false))
+                                        }
                                         Toast.makeText(context, "Download started: $fileName", Toast.LENGTH_SHORT).show()
                                     } catch (e: Exception) {
                                         Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()

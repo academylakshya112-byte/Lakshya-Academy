@@ -131,7 +131,11 @@ fun StudentHomeDashboard(
     ) {
         item {
             val userPhotoUri = viewModel.currentUser?.photoUri ?: ""
-            DashboardBrandHeader(studentName = studentName, photoUri = userPhotoUri)
+            DashboardBrandHeader(
+                studentName = studentName,
+                photoUri = userPhotoUri,
+                onNotificationClick = { onTabSelect("ALERTS") }
+            )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = "Official Announcements (महत्वपूर्ण सूचना पट्ट)",
@@ -226,20 +230,8 @@ fun CourseCard(
     val context = LocalContext.current
     val displayImageUrl = remember(course.imageUrl, course.id, course.title) {
         when {
-            course.id == 7 || course.title.contains("AIRFORCE", ignoreCase = true) -> {
-                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/lms_1783610971221.jpg"
-            }
-            course.id == 10 || course.title.contains("9th Class", ignoreCase = true) || course.title.contains("9th", ignoreCase = true) -> {
-                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/WhatsApp%20Image%202026-07-11%20at%202.03.25%20PM.jpeg"
-            }
-            course.id == 11 || course.title.contains("12th", ignoreCase = true) -> {
-                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/12TH%20.jpeg"
-            }
-            course.id == 12 || course.title.contains("10th Class", ignoreCase = true) || course.title.contains("10th", ignoreCase = true) -> {
-                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/10TH%20.png"
-            }
-            course.id == 6 || course.title.contains("Toppers Batch", ignoreCase = true) || course.title.contains("PCB 11th Class", ignoreCase = true) -> {
-                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/lms_1783656408082.jpg"
+            course.id == 6 || course.title.contains("Refresh Your Mind", ignoreCase = true) -> {
+                "https://kugyjkowjtbbpyxsbiup.supabase.co/storage/v1/object/public/videos/WhatsApp%20Image%202026-08-10%20at%2012.29.02%20PM.jpeg"
             }
             else -> course.imageUrl
         }

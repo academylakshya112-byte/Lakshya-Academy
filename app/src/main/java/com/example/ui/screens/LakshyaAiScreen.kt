@@ -326,6 +326,8 @@ fun LakshyaAiScreen(
     initialSubjectContext: String? = null,
     onBack: () -> Unit
 ) {
+    com.example.util.TrackStudyModule(com.example.util.StudyTracker.MODULE_AI_COACH)
+
     var selectedTab by remember { mutableStateOf(0) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()

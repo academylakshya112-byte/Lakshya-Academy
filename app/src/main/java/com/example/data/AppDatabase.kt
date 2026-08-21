@@ -230,6 +230,24 @@ interface AcademyDao {
 
     @Query("DELETE FROM study_websites")
     suspend fun deleteAllStudyWebsites()
+
+    // === Study Website Favorites ===
+    @Query("""
+        SELECT w.* FROM study_websites w 
+        INNER JOIN study_website_favorites f ON w.id = f.websiteId 
+        WHERE f.userEmail = :userEmail 
+        ORDER BY f.favoritedAt DESC
+    """)
+    fun getFavoriteStudyWebsites(userEmail: String): Flow<List<StudyWebsiteEntity>>
+
+    @Query("SELECT websiteId FROM study_website_favorites WHERE userEmail = :userEmail")
+    fun getFavoriteWebsiteIds(userEmail: String): Flow<List<String>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertStudyWebsiteFavorite(favorite: StudyWebsiteFavoriteEntity)
+
+    @Query("DELETE FROM study_website_favorites WHERE userEmail = :userEmail AND websiteId = :websiteId")
+    suspend fun deleteStudyWebsiteFavorite(userEmail: String, websiteId: String)
 }
 
 @Database(
@@ -254,9 +272,10 @@ interface AcademyDao {
         PreviousPaperFileEntity::class,
         FreeBookFolderEntity::class,
         FreeBookFileEntity::class,
-        StudyWebsiteEntity::class
+        StudyWebsiteEntity::class,
+        StudyWebsiteFavoriteEntity::class
     ],
-    version = 19,
+    version = 21,
     exportSchema = false
 )
 abstract class AcademyDatabase : RoomDatabase() {
