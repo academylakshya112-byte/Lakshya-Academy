@@ -28,7 +28,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.R
-import com.example.data.CourseEntity
+import com.example.data.*
 import com.example.api.R2SupabaseManager
 import com.example.api.SupabaseVideo
 import com.example.ui.theme.*
@@ -48,6 +48,7 @@ fun StudentHomeDashboard(
     val userEmail = viewModel.currentUser?.email ?: ""
 
     var showCommunityPopup by remember { mutableStateOf(true) }
+    var showStudyAppsPopup by remember { mutableStateOf(false) }
     val popupConfig = viewModel.communityPopupConfig
 
     var supabaseVideos by remember { mutableStateOf<List<SupabaseVideo>>(emptyList()) }
@@ -66,6 +67,13 @@ fun StudentHomeDashboard(
         CommunityPopupDialog(
             config = popupConfig,
             onDismiss = { showCommunityPopup = false }
+        )
+    }
+
+    if (showStudyAppsPopup) {
+        StudyAppsPopupDialog(
+            config = popupConfig.getStudyAppsConfig(),
+            onDismiss = { showStudyAppsPopup = false }
         )
     }
 
@@ -163,6 +171,14 @@ fun StudentHomeDashboard(
                 when (tab) {
                     "COURSES" -> onTabSelect("COURSES")
                     "TESTS" -> onTabSelect("TESTS")
+                    "study_websites" -> {
+                        val studyConfig = popupConfig.getStudyAppsConfig()
+                        if (studyConfig.enabled) {
+                            showStudyAppsPopup = true
+                        } else {
+                            onTabSelect(tab)
+                        }
+                    }
                     "books", "timetable", "previous_papers", "current_affairs", "syllabus" -> showMaterialTypeDialog = tab.replaceFirstChar { it.uppercase() }
                     else -> onTabSelect(tab)
                 }
@@ -577,7 +593,7 @@ fun CommunityPopupDialog(
                                 // 1. Green Button - Join WhatsApp Channel
                                 Button(
                                     onClick = {
-                                        openExternalUrl(context, config.whatsappUrl)
+                                        openExternalUrl(context, config.realWhatsappUrl)
                                     },
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -668,6 +684,122 @@ fun CommunityPopupDialog(
                                 tint = Color.White,
                                 modifier = Modifier.size(20.dp)
                             )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun StudyAppsPopupDialog(
+    config: com.example.data.StudyAppsPopupConfig,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+
+    Dialog(
+        onDismissRequest = {
+            if (config.closeButtonEnabled) {
+                onDismiss()
+            }
+        },
+        properties = androidx.compose.ui.window.DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = config.closeButtonEnabled,
+            dismissOnClickOutside = config.closeButtonEnabled
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.85f))
+                .clickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null,
+                    onClick = {
+                        if (config.closeButtonEnabled) {
+                            onDismiss()
+                        }
+                    }
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth(0.92f)
+                    .widthIn(max = 420.dp)
+                    .padding(16.dp)
+                    .clickable(enabled = false, onClick = {}),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 16.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        // Image
+                        if (config.imageUrl.isNotBlank()) {
+                            val resolvedImg = com.example.service.MediaStorageServiceFactory.getService(context).resolveMediaUrl(config.imageUrl)
+                            AsyncImage(
+                                model = resolvedImg,
+                                contentDescription = "Study Apps Alert",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 200.dp, max = 380.dp)
+                                    .clip(RoundedCornerShape(16.dp)),
+                                contentScale = ContentScale.Fit
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp)
+                                    .background(Color.LightGray.copy(alpha = 0.3f), RoundedCornerShape(16.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("No Image Uploaded by Admin", color = Color.Gray, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        // Close (X) button ONLY if enabled by admin
+                        if (config.closeButtonEnabled) {
+                            IconButton(
+                                onClick = onDismiss,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(8.dp)
+                                    .size(32.dp)
+                                    .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Close",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    if (config.closeButtonEnabled) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = onDismiss,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = BrandBluePrimary
+                            )
+                        ) {
+                            Text("OK / Close", fontWeight = FontWeight.Bold, color = Color.White)
                         }
                     }
                 }

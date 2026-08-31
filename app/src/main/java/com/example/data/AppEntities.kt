@@ -433,6 +433,51 @@ data class CommunityPopupEntity(
     @Json(name = "updated_at") val updatedAt: String? = null
 )
 
+data class StudyAppsPopupConfig(
+    val enabled: Boolean = false,
+    val imageUrl: String = "",
+    val closeButtonEnabled: Boolean = true,
+    val originalWhatsappUrl: String = ""
+)
+
+fun CommunityPopupEntity.getStudyAppsConfig(): StudyAppsPopupConfig {
+    if (whatsappUrl.startsWith("STUDYAPPS_V1:")) {
+        try {
+            val data = whatsappUrl.removePrefix("STUDYAPPS_V1:")
+            val parts = data.split(";")
+            var enabled = false
+            var imageUrl = ""
+            var closeButtonEnabled = true
+            var originalWhatsappUrl = ""
+            for (part in parts) {
+                val kv = part.split("=", limit = 2)
+                if (kv.size == 2) {
+                    val key = kv[0]
+                    val value = kv[1]
+                    when (key) {
+                        "enabled" -> enabled = value.toBoolean()
+                        "imageUrl" -> imageUrl = value
+                        "closeButtonEnabled" -> closeButtonEnabled = value.toBoolean()
+                        "originalWhatsappUrl" -> originalWhatsappUrl = value
+                    }
+                }
+            }
+            return StudyAppsPopupConfig(enabled, imageUrl, closeButtonEnabled, originalWhatsappUrl)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+    return StudyAppsPopupConfig(false, "", true, whatsappUrl)
+}
+
+fun CommunityPopupEntity.withStudyAppsConfig(config: StudyAppsPopupConfig): CommunityPopupEntity {
+    val serialized = "STUDYAPPS_V1:enabled=${config.enabled};imageUrl=${config.imageUrl};closeButtonEnabled=${config.closeButtonEnabled};originalWhatsappUrl=${config.originalWhatsappUrl}"
+    return this.copy(whatsappUrl = serialized)
+}
+
+val CommunityPopupEntity.realWhatsappUrl: String
+    get() = getStudyAppsConfig().originalWhatsappUrl
+
 @Entity(tableName = "study_progress")
 data class StudyProgressDto(
     @PrimaryKey(autoGenerate = true) val id: Int? = null,

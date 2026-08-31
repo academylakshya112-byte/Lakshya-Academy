@@ -1801,12 +1801,42 @@ fun AdminCommunityPopupScreen(viewModel: AcademyViewModel) {
         viewModel.fetchCommunityPopup()
     }
 
-    var enabled by remember(popupConfig.id) { mutableStateOf(popupConfig.enabled) }
-    var title by remember(popupConfig.id) { mutableStateOf(popupConfig.title) }
-    var description by remember(popupConfig.id) { mutableStateOf(popupConfig.description) }
-    var imageUrl by remember(popupConfig.id) { mutableStateOf(popupConfig.imageUrl) }
-    var whatsappUrl by remember(popupConfig.id) { mutableStateOf(popupConfig.whatsappUrl) }
-    var telegramUrl by remember(popupConfig.id) { mutableStateOf(popupConfig.telegramUrl) }
+    var enabled by remember(popupConfig) { mutableStateOf(popupConfig.enabled) }
+    var title by remember(popupConfig) { mutableStateOf(popupConfig.title) }
+    var description by remember(popupConfig) { mutableStateOf(popupConfig.description) }
+    var imageUrl by remember(popupConfig) { mutableStateOf(popupConfig.imageUrl) }
+    var whatsappUrl by remember(popupConfig) { mutableStateOf(popupConfig.realWhatsappUrl) }
+    var telegramUrl by remember(popupConfig) { mutableStateOf(popupConfig.telegramUrl) }
+
+    val studyAppsConfig = remember(popupConfig) { popupConfig.getStudyAppsConfig() }
+    var studyAppsEnabled by remember(popupConfig) { mutableStateOf(studyAppsConfig.enabled) }
+    var studyAppsImageUrl by remember(popupConfig) { mutableStateOf(studyAppsConfig.imageUrl) }
+    var studyAppsCloseEnabled by remember(popupConfig) { mutableStateOf(studyAppsConfig.closeButtonEnabled) }
+
+    var isUploadingStudyImage by remember { mutableStateOf(false) }
+
+    val studyImagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch {
+                isUploadingStudyImage = true
+                try {
+                    val publicUrl = viewModel.uploadBannerImage(context, uri)
+                    if (publicUrl.isNotBlank()) {
+                        studyAppsImageUrl = publicUrl
+                        Toast.makeText(context, "Study Apps Popup image uploaded successfully!", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Image upload failed. Please try again.", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Image upload error: ${e.message}", Toast.LENGTH_LONG).show()
+                } finally {
+                    isUploadingStudyImage = false
+                }
+            }
+        }
+    }
 
     var isUploadingImage by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
@@ -2011,25 +2041,173 @@ fun AdminCommunityPopupScreen(viewModel: AcademyViewModel) {
                     )
 
                     Spacer(modifier = Modifier.height(8.dp))
+                }
+            }
+        }
 
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Text(
+                        text = "📱 Study Apps Popup Settings (स्टडी ऐप्स पॉपअप)",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+
+                    // Enable/Disable Switch
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Enable Study Apps Popup",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                            Text(
+                                text = if (studyAppsEnabled) "Popup will show when user taps Study Apps" else "No popup, open Study Apps directly",
+                                fontSize = 12.sp,
+                                color = if (studyAppsEnabled) Color(0xFF16A34A) else Color.Gray
+                            )
+                        }
+                        Switch(
+                            checked = studyAppsEnabled,
+                            onCheckedChange = { studyAppsEnabled = it }
+                        )
+                    }
+
+                    HorizontalDivider()
+
+                    // Close button enabled Switch
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Show Close Button (क्लोज़ बटन दिखाएं)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                            Text(
+                                text = if (studyAppsCloseEnabled) "Users can close the popup" else "Popup is uncloseable (यूजर क्लोज नहीं कर पायेगा)",
+                                fontSize = 12.sp,
+                                color = if (studyAppsCloseEnabled) Color(0xFF16A34A) else Color(0xFFDC2626)
+                            )
+                        }
+                        Switch(
+                            checked = studyAppsCloseEnabled,
+                            onCheckedChange = { studyAppsCloseEnabled = it }
+                        )
+                    }
+
+                    HorizontalDivider()
+
+                    // Image Upload / Preview
+                    Text(
+                        text = "Popup Banner Image (पॉपअप बैनर इमेज)",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+
+                    if (studyAppsImageUrl.isNotBlank()) {
+                        val resolvedImg = com.example.service.MediaStorageServiceFactory.getService(context).resolveMediaUrl(studyAppsImageUrl)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(160.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.LightGray)
+                        ) {
+                            AsyncImage(
+                                model = resolvedImg,
+                                contentDescription = "Popup Image Preview",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Fit
+                            )
+                            IconButton(
+                                onClick = { studyAppsImageUrl = "" },
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(8.dp)
+                                    .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                                    .size(28.dp)
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.White, modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+
+                    Button(
+                        onClick = { studyImagePickerLauncher.launch("image/*") },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isUploadingStudyImage,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                    ) {
+                        if (isUploadingStudyImage) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Uploading Image...")
+                        } else {
+                            Icon(Icons.Default.CloudUpload, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Upload Popup Image")
+                        }
+                    }
+
+                    // Text Field for manual image URL
+                    OutlinedTextField(
+                        value = studyAppsImageUrl,
+                        onValueChange = { studyAppsImageUrl = it },
+                        label = { Text("Or paste Image URL manually") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                }
+            }
+        }
+
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
                     // Save Button
                     Button(
                         onClick = {
                             scope.launch {
                                 isSaving = true
-                                val updatedConfig = popupConfig.copy(
+                                val baseConfig = popupConfig.copy(
                                     enabled = enabled,
                                     title = title.trim(),
                                     description = description.trim(),
                                     imageUrl = imageUrl.trim(),
-                                    whatsappUrl = whatsappUrl.trim(),
                                     telegramUrl = telegramUrl.trim(),
                                     updatedAt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).format(java.util.Date())
                                 )
+                                val studyConfigObj = com.example.data.StudyAppsPopupConfig(
+                                    enabled = studyAppsEnabled,
+                                    imageUrl = studyAppsImageUrl.trim(),
+                                    closeButtonEnabled = studyAppsCloseEnabled,
+                                    originalWhatsappUrl = whatsappUrl.trim()
+                                )
+                                val updatedConfig = baseConfig.withStudyAppsConfig(studyConfigObj)
                                 val success = viewModel.updateCommunityPopupConfig(updatedConfig)
                                 isSaving = false
                                 if (success) {
-                                    Toast.makeText(context, "Community Popup settings saved successfully!", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Popup settings saved successfully!", Toast.LENGTH_SHORT).show()
                                 } else {
                                     Toast.makeText(context, "Saved locally. Supabase sync will retry when online.", Toast.LENGTH_LONG).show()
                                 }
