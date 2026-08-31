@@ -3670,4 +3670,283 @@ class AcademyViewModel(application: Application) : AndroidViewModel(application)
         communityPopupConfig = config
         return repository.saveCommunityPopup(config)
     }
+
+    // ==========================================
+    // === FOCUS STUDY MODE STATE & ACTIONS ===
+    // ==========================================
+
+    val activeFocusUserEmail: String
+        get() = currentUser?.email ?: "student@shadow.local"
+
+    val currentFocusSetting = repository.getFocusSetting(activeFocusUserEmail)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), FocusSettingEntity(userEmail = activeFocusUserEmail))
+
+    val allFocusSessions = repository.getAllFocusSessions(activeFocusUserEmail)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val blockedApps = repository.getBlockedApps(activeFocusUserEmail)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val blockedWebsites = repository.getBlockedWebsites(activeFocusUserEmail)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val studyChannels = repository.getStudyChannels(activeFocusUserEmail)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val focusPlannerTasks = repository.getFocusPlannerTasks(activeFocusUserEmail)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    init {
+        viewModelScope.launch {
+            populateDefaultFocusDataIfEmpty(activeFocusUserEmail)
+        }
+    }
+
+    fun populateDefaultFocusDataIfEmpty(email: String) {
+        viewModelScope.launch {
+            try {
+                // Initialize default Focus Settings if none exist
+                val setting = repository.getFocusSettingDirect(email)
+                if (setting == null) {
+                    repository.saveFocusSetting(FocusSettingEntity(userEmail = email))
+                }
+
+                // Initialize default Study Channels if empty
+                val existingChannels = repository.getStudyChannelsDirect(email)
+                if (existingChannels.isEmpty()) {
+                    val defaultChannels = listOf(
+                        StudyChannelEntity(userEmail = email, channelName = "Physics Wallah", channelHandle = "@PhysicsWallah", subscriberCount = "13.2M+", channelLogoUrl = "", isApproved = true),
+                        StudyChannelEntity(userEmail = email, channelName = "Competition Wallah", channelHandle = "@CompetitionWallah", subscriberCount = "2.8M+", channelLogoUrl = "", isApproved = true),
+                        StudyChannelEntity(userEmail = email, channelName = "JEE Wallah", channelHandle = "@JEEWallah", subscriberCount = "2.1M+", channelLogoUrl = "", isApproved = true),
+                        StudyChannelEntity(userEmail = email, channelName = "Magnet Brains", channelHandle = "@MagnetBrainsEducation", subscriberCount = "10.4M+", channelLogoUrl = "", isApproved = true),
+                        StudyChannelEntity(userEmail = email, channelName = "Khan Academy India", channelHandle = "@KhanAcademyHindi", subscriberCount = "3.5M+", channelLogoUrl = "", isApproved = true),
+                        StudyChannelEntity(userEmail = email, channelName = "Unacademy JEE", channelHandle = "@UnacademyJEE", subscriberCount = "2.4M+", channelLogoUrl = "", isApproved = true),
+                        StudyChannelEntity(userEmail = email, channelName = "Vedantu 9&10", channelHandle = "@Vedantu9_10", subscriberCount = "3.1M+", channelLogoUrl = "", isApproved = true)
+                    )
+                    repository.insertStudyChannels(defaultChannels)
+                }
+
+                // Initialize default Blocked Websites if empty
+                val existingSites = repository.getBlockedWebsitesDirect(email)
+                if (existingSites.isEmpty()) {
+                    val defaultSites = listOf(
+                        BlockedWebsiteEntity(userEmail = email, domain = "instagram.com", isBlocked = true, isEducationalAllowed = false),
+                        BlockedWebsiteEntity(userEmail = email, domain = "facebook.com", isBlocked = true, isEducationalAllowed = false),
+                        BlockedWebsiteEntity(userEmail = email, domain = "twitter.com", isBlocked = true, isEducationalAllowed = false),
+                        BlockedWebsiteEntity(userEmail = email, domain = "reddit.com", isBlocked = true, isEducationalAllowed = false),
+                        BlockedWebsiteEntity(userEmail = email, domain = "netflix.com", isBlocked = true, isEducationalAllowed = false),
+                        // Allowed educational sites
+                        BlockedWebsiteEntity(userEmail = email, domain = "ncert.nic.in", isBlocked = false, isEducationalAllowed = true),
+                        BlockedWebsiteEntity(userEmail = email, domain = "khanacademy.org", isBlocked = false, isEducationalAllowed = true),
+                        BlockedWebsiteEntity(userEmail = email, domain = "wikipedia.org", isBlocked = false, isEducationalAllowed = true),
+                        BlockedWebsiteEntity(userEmail = email, domain = "swayam.gov.in", isBlocked = false, isEducationalAllowed = true)
+                    )
+                    for (site in defaultSites) {
+                        repository.insertBlockedWebsite(site)
+                    }
+                }
+
+                // Sync in-memory cache with FocusManager
+                syncFocusCacheWithManager(email)
+            } catch (e: Exception) {
+                Log.e("AcademyViewModel", "Failed to populate default focus data: ${e.message}")
+            }
+        }
+    }
+
+    fun syncFocusCacheWithManager(email: String = activeFocusUserEmail) {
+        viewModelScope.launch {
+            try {
+                val blockedAppEntities = repository.getBlockedAppsDirect(email)
+                val blockedPkgSet = blockedAppEntities.filter { it.isBlocked }.map { it.packageName }.toSet()
+
+                val websiteEntities = repository.getBlockedWebsitesDirect(email)
+                val blockedDomainSet = websiteEntities.filter { it.isBlocked && !it.isEducationalAllowed }.map { it.domain }.toSet()
+
+                val channelEntities = repository.getStudyChannelsDirect(email)
+                val allowedChannelNames = channelEntities.filter { it.isApproved }.map { it.channelName.lowercase() }.toSet()
+
+                val setting = repository.getFocusSettingDirect(email)
+                val blockShorts = setting?.blockShortsAndReels ?: true
+
+                com.example.service.FocusManager.updateCache(
+                    blockedPackages = blockedPkgSet,
+                    blockedDomains = blockedDomainSet,
+                    allowedChannels = allowedChannelNames,
+                    blockShorts = blockShorts,
+                    context = getApplication<Application>()
+                )
+            } catch (e: Exception) {
+                Log.e("AcademyViewModel", "Failed to sync Focus cache: ${e.message}")
+            }
+        }
+    }
+
+    fun saveFocusSetting(setting: FocusSettingEntity) {
+        viewModelScope.launch {
+            repository.saveFocusSetting(setting)
+            syncFocusCacheWithManager(setting.userEmail)
+        }
+    }
+
+    fun toggleBlockedApp(packageName: String, appName: String, isBlocked: Boolean) {
+        viewModelScope.launch {
+            val app = BlockedAppEntity(
+                userEmail = activeFocusUserEmail,
+                packageName = packageName,
+                appName = appName,
+                isBlocked = isBlocked
+            )
+            repository.insertBlockedApp(app)
+            syncFocusCacheWithManager(activeFocusUserEmail)
+        }
+    }
+
+    fun setBlockedAppsBulk(apps: List<BlockedAppEntity>) {
+        viewModelScope.launch {
+            repository.insertBlockedApps(apps)
+            syncFocusCacheWithManager(activeFocusUserEmail)
+        }
+    }
+
+    fun clearAllBlockedApps() {
+        viewModelScope.launch {
+            repository.deleteAllBlockedApps(activeFocusUserEmail)
+            syncFocusCacheWithManager(activeFocusUserEmail)
+        }
+    }
+
+    fun addBlockedWebsite(domain: String, isEducationalAllowed: Boolean) {
+        viewModelScope.launch {
+            val cleanDomain = domain.trim().lowercase().removePrefix("https://").removePrefix("http://").removePrefix("www.")
+            if (cleanDomain.isNotBlank()) {
+                val site = BlockedWebsiteEntity(
+                    userEmail = activeFocusUserEmail,
+                    domain = cleanDomain,
+                    isBlocked = !isEducationalAllowed,
+                    isEducationalAllowed = isEducationalAllowed
+                )
+                repository.insertBlockedWebsite(site)
+                syncFocusCacheWithManager(activeFocusUserEmail)
+            }
+        }
+    }
+
+    fun deleteBlockedWebsite(id: Int) {
+        viewModelScope.launch {
+            repository.deleteBlockedWebsite(id)
+            syncFocusCacheWithManager(activeFocusUserEmail)
+        }
+    }
+
+    fun addStudyChannel(channelName: String, handle: String = "", subscriberCount: String = "", logoUrl: String = "") {
+        viewModelScope.launch {
+            val trimmedName = channelName.trim()
+            if (trimmedName.isNotBlank()) {
+                val channel = StudyChannelEntity(
+                    userEmail = activeFocusUserEmail,
+                    channelName = trimmedName,
+                    channelHandle = handle.ifBlank { "@${trimmedName.replace(" ", "")}" },
+                    channelLogoUrl = logoUrl,
+                    subscriberCount = subscriberCount.ifBlank { "Educational" },
+                    isApproved = true,
+                    isCustom = true
+                )
+                repository.insertStudyChannel(channel)
+                syncFocusCacheWithManager(activeFocusUserEmail)
+            }
+        }
+    }
+
+    fun removeStudyChannel(id: Int) {
+        viewModelScope.launch {
+            repository.deleteStudyChannel(id)
+            syncFocusCacheWithManager(activeFocusUserEmail)
+        }
+    }
+
+    fun deleteAllStudyChannels() {
+        viewModelScope.launch {
+            repository.deleteAllStudyChannels(activeFocusUserEmail)
+            syncFocusCacheWithManager(activeFocusUserEmail)
+        }
+    }
+
+    // === Focus Planner Task Operations ===
+    fun addFocusPlannerTask(
+        subject: String,
+        chapter: String = "",
+        topic: String = "",
+        startTimeStr: String = "07:00 PM",
+        endTimeStr: String = "08:00 PM",
+        durationMinutes: Int = 60,
+        priority: String = "Medium",
+        hasReminder: Boolean = true,
+        repeatOption: String = "Daily"
+    ) {
+        viewModelScope.launch {
+            val task = FocusTaskEntity(
+                userEmail = activeFocusUserEmail,
+                subject = subject.trim().ifBlank { "General" },
+                chapter = chapter.trim(),
+                topic = topic.trim(),
+                startTimeStr = startTimeStr,
+                endTimeStr = endTimeStr,
+                durationMinutes = durationMinutes,
+                priority = priority,
+                hasReminder = hasReminder,
+                repeatOption = repeatOption,
+                isCompleted = false
+            )
+            repository.insertFocusPlannerTask(task)
+        }
+    }
+
+    fun toggleFocusPlannerTask(task: FocusTaskEntity) {
+        viewModelScope.launch {
+            repository.updateFocusPlannerTask(task.copy(isCompleted = !task.isCompleted))
+        }
+    }
+
+    fun deleteFocusPlannerTask(id: Int) {
+        viewModelScope.launch {
+            repository.deleteFocusPlannerTask(id)
+        }
+    }
+
+    fun recordCompletedFocusSession(
+        subject: String,
+        chapter: String,
+        topic: String,
+        target: String,
+        notes: String,
+        durationMinutes: Int,
+        sessionType: String,
+        appsBlockedCount: Int,
+        pomodoroCyclesCompleted: Int = 0
+    ) {
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            val dateStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date(now))
+            val xp = (durationMinutes * 1) + (if (pomodoroCyclesCompleted > 0) pomodoroCyclesCompleted * 10 else 0)
+            val session = FocusSessionEntity(
+                userEmail = activeFocusUserEmail,
+                startTime = now - (durationMinutes * 60 * 1000L),
+                endTime = now,
+                durationMinutes = durationMinutes,
+                sessionType = sessionType,
+                appsBlockedCount = appsBlockedCount,
+                completed = true,
+                dateStr = dateStr,
+                pomodoroCyclesCompleted = pomodoroCyclesCompleted,
+                subject = subject.ifBlank { "Mathematics" },
+                chapter = chapter,
+                topic = topic,
+                target = target,
+                notes = notes,
+                xpEarned = xp
+            )
+            repository.insertFocusSession(session)
+        }
+    }
 }

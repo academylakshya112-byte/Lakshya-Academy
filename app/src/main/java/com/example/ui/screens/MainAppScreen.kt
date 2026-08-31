@@ -142,6 +142,12 @@ fun StudentMainContainer(viewModel: AcademyViewModel) {
 
 
     val context = LocalContext.current
+    LaunchedEffect(Unit) {
+        val navTarget = (context as? android.app.Activity)?.intent?.getStringExtra("NAV_TARGET")
+        if (navTarget == "focus_study" || navTarget == "youtube_study_search") {
+            studentTab = "home"
+        }
+    }
     LaunchedEffect(viewModel.currentUser) {
         val u = viewModel.currentUser
         if (u != null) {
@@ -161,8 +167,8 @@ fun StudentMainContainer(viewModel: AcademyViewModel) {
                     NavigationBarItem(
                         selected = studentTab == "courses",
                         onClick = { studentTab = "courses" },
-                        icon = { Icon(Icons.Default.LibraryBooks, contentDescription = null) },
-                        label = { Text("My Study") }
+                        icon = { Icon(Icons.Default.Headphones, contentDescription = "My Music") },
+                        label = { Text("My Music") }
                     )
                     NavigationBarItem(
                         selected = studentTab == "profile",
@@ -391,7 +397,7 @@ fun BannerCarousel(banners: List<BannerEntity>, onTabSelect: (String) -> Unit) {
                 id = -1,
                 title = "Join Our Official Telegram Study Channel! 💎",
                 imageUrl = "drawable/img_banner_telegram_1783264931077",
-                linkUrl = "https://t.me/+k9fhlPovsDE5ZDI1",
+                linkUrl = "https://t.me/Shadow_X_Rahul_Hub",
                 buttonText = "JOIN NOW",
                 description = "Download free PDFs, daily GK questionnaires, exam syllabus & interactive worksheets instantly."
             ),
@@ -407,7 +413,7 @@ fun BannerCarousel(banners: List<BannerEntity>, onTabSelect: (String) -> Unit) {
                 id = -3,
                 title = "Join Our Official WhatsApp Group! 👥",
                 imageUrl = "drawable/img_banner_whatsapp_1783264919547",
-                linkUrl = "https://chat.whatsapp.com/JDHYEnF8rQP3D0kIeH3Qoj?s=cl&p=a&ilr=2",
+                linkUrl = "https://whatsapp.com/channel/0029VbD72tmICVfeEqFwVK3M",
                 buttonText = "JOIN NOW",
                 description = "Stay updated with live class announcements, free PDF notes & community chat!"
             ),

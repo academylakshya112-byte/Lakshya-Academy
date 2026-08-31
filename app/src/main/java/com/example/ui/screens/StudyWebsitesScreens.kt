@@ -33,6 +33,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
@@ -43,6 +44,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -69,6 +71,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.example.R
+import kotlin.math.*
 import com.example.data.StudyWebsiteEntity
 import com.example.ui.viewmodel.AcademyViewModel
 import com.example.api.R2SupabaseManager
@@ -621,25 +625,77 @@ fun ReferenceShadowXTopBranding(
     modifier: Modifier = Modifier,
     onMenuClick: (() -> Unit)? = null
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "halo_transition")
-    val haloPulse by infiniteTransition.animateFloat(
-        initialValue = 0.6f,
-        targetValue = 1.0f,
+    val infiniteTransition = rememberInfiniteTransition(label = "shadow_x_3d_anim")
+
+    // Continuous 360° Rotations for surrounding orbital rings
+    val orbitRotationFast by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(4500, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "orbit_rot_fast"
+    )
+    val orbitRotationReverse by infiniteTransition.animateFloat(
+        initialValue = 360f,
+        targetValue = 0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(7000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "orbit_rot_rev"
+    )
+
+    // 3D Spatial Holographic Tilt & Float
+    val tiltAngleX by infiniteTransition.animateFloat(
+        initialValue = -8f,
+        targetValue = 8f,
         animationSpec = infiniteRepeatable(
             animation = tween(2800, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
-        label = "halo_pulse"
+        label = "tilt_x"
     )
-    val floatOffset by infiniteTransition.animateFloat(
-        initialValue = -2.5f,
-        targetValue = 2.5f,
+    val tiltAngleY by infiniteTransition.animateFloat(
+        initialValue = -12f,
+        targetValue = 12f,
         animationSpec = infiniteRepeatable(
             animation = tween(3400, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
-        label = "float_offset"
+        label = "tilt_y"
     )
+    val floatOffset by infiniteTransition.animateFloat(
+        initialValue = -4f,
+        targetValue = 4f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(3000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "float_y"
+    )
+
+    // Radiant Aura & Pulse
+    val haloPulse by infiniteTransition.animateFloat(
+        initialValue = 0.65f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "halo_pulse"
+    )
+    val shimmerTranslate by infiniteTransition.animateFloat(
+        initialValue = -120f,
+        targetValue = 160f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2600, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "shimmer_glint"
+    )
+
     val dotBlinkAlpha by infiniteTransition.animateFloat(
         initialValue = 0.25f,
         targetValue = 1.0f,
@@ -666,129 +722,197 @@ fun ReferenceShadowXTopBranding(
             .padding(top = 16.dp, bottom = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // 1. Top Circular Golden Logo Emblem with Crown & "SR"
+        // 1. 3D Holographic Animated Circular Logo with Surrounding Orbit Rings
         Box(
             modifier = Modifier
-                .size(116.dp)
+                .size(136.dp)
                 .offset(y = floatOffset.dp),
             contentAlignment = Alignment.Center
         ) {
-            // Ambient Warm Golden Aura Glow
+            // Surrounding 3D Multi-Layer Animated Rings & Orbiting Energy Nodes
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val centerOffset = Offset(size.width / 2f, size.height / 2f)
-                val r = size.minDimension / 2f
+                val baseRadius = size.minDimension / 2f
 
-                // Outer soft gold halo
+                // Layer 1: Ambient Holographic Nebula Aura Glow
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            Color(0xFFFFB300).copy(alpha = 0.55f * haloPulse),
-                            Color(0xFFFF8F00).copy(alpha = 0.22f * haloPulse),
+                            Color(0xFFFFB300).copy(alpha = 0.45f * haloPulse),
+                            Color(0xFFFF6D00).copy(alpha = 0.25f * haloPulse),
+                            Color(0xFF7C3AED).copy(alpha = 0.15f * haloPulse),
                             Color.Transparent
                         ),
                         center = centerOffset,
-                        radius = r
+                        radius = baseRadius * 1.05f
                     )
                 )
 
-                // Gold ring
-                drawCircle(
-                    brush = Brush.sweepGradient(
-                        listOf(
-                            Color(0xFFFFD54F),
-                            Color(0xFFFF8F00),
-                            Color(0xFFFFE082),
-                            Color(0xFFFF6F00),
-                            Color(0xFFFFD54F)
+                // Layer 2: Fast Orbiting Dual-Arc Neon Ring (Clockwise)
+                rotate(orbitRotationFast, pivot = centerOffset) {
+                    drawArc(
+                        brush = Brush.sweepGradient(
+                            listOf(
+                                Color(0xFFFFD54F),
+                                Color(0xFFFF9100),
+                                Color.Transparent,
+                                Color(0xFF00E5FF),
+                                Color(0xFFFFD54F)
+                            )
+                        ),
+                        startAngle = 0f,
+                        sweepAngle = 140f,
+                        useCenter = false,
+                        style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
+                    )
+                    drawArc(
+                        brush = Brush.sweepGradient(
+                            listOf(
+                                Color(0xFF00E5FF),
+                                Color(0xFFFFB300),
+                                Color.Transparent,
+                                Color(0xFFFF3D00),
+                                Color(0xFF00E5FF)
+                            )
+                        ),
+                        startAngle = 180f,
+                        sweepAngle = 140f,
+                        useCenter = false,
+                        style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
+                    )
+
+                    // Orbiting Satellite Energy Node 1
+                    val rad = Math.toRadians(0.0)
+                    val rOrbit = baseRadius * 0.88f
+                    val nodeX = centerOffset.x + (rOrbit * cos(rad)).toFloat()
+                    val nodeY = centerOffset.y + (rOrbit * sin(rad)).toFloat()
+                    drawCircle(
+                        color = Color(0xFFFFD54F),
+                        radius = 3.5.dp.toPx(),
+                        center = Offset(nodeX, nodeY)
+                    )
+                    drawCircle(
+                        color = Color.White,
+                        radius = 1.8.dp.toPx(),
+                        center = Offset(nodeX, nodeY)
+                    )
+
+                    // Orbiting Satellite Energy Node 2
+                    val rad2 = Math.toRadians(180.0)
+                    val nodeX2 = centerOffset.x + (rOrbit * cos(rad2)).toFloat()
+                    val nodeY2 = centerOffset.y + (rOrbit * sin(rad2)).toFloat()
+                    drawCircle(
+                        color = Color(0xFF00E5FF),
+                        radius = 3.5.dp.toPx(),
+                        center = Offset(nodeX2, nodeY2)
+                    )
+                    drawCircle(
+                        color = Color.White,
+                        radius = 1.8.dp.toPx(),
+                        center = Offset(nodeX2, nodeY2)
+                    )
+                }
+
+                // Layer 3: Counter-Rotating Dashed Sci-Fi Tech Ring (Counter-Clockwise)
+                rotate(orbitRotationReverse, pivot = centerOffset) {
+                    drawCircle(
+                        brush = Brush.sweepGradient(
+                            listOf(
+                                Color(0xFFFFAB00).copy(alpha = 0.8f),
+                                Color(0xFF7C3AED).copy(alpha = 0.7f),
+                                Color(0xFF00E5FF).copy(alpha = 0.8f),
+                                Color(0xFFFFAB00).copy(alpha = 0.8f)
+                            )
+                        ),
+                        radius = baseRadius * 0.76f,
+                        center = centerOffset,
+                        style = Stroke(
+                            width = 1.8.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f)
                         )
-                    ),
-                    radius = r * 0.72f,
-                    center = centerOffset,
-                    style = Stroke(width = 2.dp.toPx())
-                )
+                    )
+                }
             }
 
-            // Inner Emblem Disk
+            // Layer 4: 3D Holographic Central Logo Container
             Box(
                 modifier = Modifier
-                    .size(80.dp)
+                    .size(86.dp)
+                    .graphicsLayer {
+                        rotationX = tiltAngleX
+                        rotationY = tiltAngleY
+                        cameraDistance = 14f * density
+                    }
                     .clip(CircleShape)
                     .background(
                         Brush.radialGradient(
-                            colors = listOf(Color(0xFF16141A), Color(0xFF070709))
+                            colors = listOf(Color(0xFF1E1B2E), Color(0xFF0A0914))
                         )
                     )
-                    .border(1.dp, Color(0xFFFFB300).copy(alpha = 0.75f), CircleShape)
-                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                    .border(
+                        BorderStroke(
+                            2.dp,
+                            Brush.sweepGradient(
+                                listOf(
+                                    Color(0xFFFFD54F),
+                                    Color(0xFFFF8F00),
+                                    Color(0xFF00E5FF),
+                                    Color(0xFFFF3D00),
+                                    Color(0xFFFFD54F)
+                                )
+                            )
+                        ),
+                        CircleShape
+                    ),
                 contentAlignment = Alignment.Center
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
+                // The Official Circular Image Logo (fits perfectly in circle)
+                AsyncImage(
+                    model = R.drawable.img_shadow_x_rahul_logo_1785913560267,
+                    contentDescription = "SHADOW X RAHUL 3D Logo",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+
+                // 3D Moving Light Shimmer Glint Sweep across glass
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape)
                 ) {
-                    // Golden Royal Crown Icon
-                    Text(
-                        text = "👑",
-                        fontSize = 12.sp,
-                        lineHeight = 12.sp
-                    )
-
-                    // Intertwined SR Monogram
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            text = "S",
-                            color = Color.White,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Black,
-                            letterSpacing = (-1).sp
-                        )
-                        Text(
-                            text = "R",
-                            color = Color(0xFFFFB300),
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Black,
-                            letterSpacing = (-1).sp
+                    val angle = 45f
+                    rotate(angle, pivot = Offset(size.width / 2f, size.height / 2f)) {
+                        drawRect(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    Color.White.copy(alpha = 0.35f),
+                                    Color.Transparent
+                                ),
+                                startX = shimmerTranslate,
+                                endX = shimmerTranslate + 40f
+                            ),
+                            topLeft = Offset(-size.width, -size.height),
+                            size = Size(size.width * 3f, size.height * 3f)
                         )
                     }
 
-                    // SHADOW X RAHUL text
-                    Text(
-                        text = "SHADOW X RAHUL",
-                        color = Color(0xFFFFE082),
-                        fontSize = 5.5.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 0.8.sp,
-                        maxLines = 1
+                    // Inner Glossy Rim Highlight
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                Color(0xFFFFD54F).copy(alpha = 0.25f)
+                            ),
+                            center = Offset(size.width * 0.35f, size.height * 0.35f),
+                            radius = size.minDimension / 2f
+                        ),
+                        radius = (size.minDimension / 2f) - 1.dp.toPx(),
+                        center = Offset(size.width / 2f, size.height / 2f),
+                        style = Stroke(width = 1.dp.toPx())
                     )
-
-                    // Flourish: — X —
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center,
-                        modifier = Modifier.padding(top = 1.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .width(8.dp)
-                                .height(0.8.dp)
-                                .background(Color(0xFFFFB300))
-                        )
-                        Text(
-                            text = " X ",
-                            color = Color(0xFFFFB300),
-                            fontSize = 5.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Box(
-                            modifier = Modifier
-                                .width(8.dp)
-                                .height(0.8.dp)
-                                .background(Color(0xFFFFB300))
-                        )
-                    }
                 }
             }
         }
@@ -1392,13 +1516,13 @@ fun FuturisticBottomNavigationBar(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Icon(
-                    imageVector = Icons.Default.Language,
-                    contentDescription = "Study Websites",
+                    imageVector = Icons.Default.Apps,
+                    contentDescription = "Study Apps",
                     tint = Color(0xFFE879F9),
                     modifier = Modifier.size(22.dp)
                 )
                 Spacer(modifier = Modifier.height(2.dp))
-                Text("Study Websites", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text("Study Apps", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
             }
 
             // 4. Downloads
@@ -2296,6 +2420,62 @@ private fun getRootDomain(host: String?): String {
     }
 }
 
+private fun extractTargetWebUrl(rawUrl: String?): String? {
+    if (rawUrl.isNullOrBlank()) return null
+    val cleanUrl = rawUrl.trim()
+
+    if (cleanUrl.startsWith("http://", ignoreCase = true) || cleanUrl.startsWith("https://", ignoreCase = true)) {
+        return cleanUrl
+    }
+
+    if (cleanUrl.startsWith("googlechrome://navigate?url=", ignoreCase = true) ||
+        cleanUrl.startsWith("googlechromes://navigate?url=", ignoreCase = true)) {
+        val encoded = cleanUrl.substringAfter("url=")
+        val decoded = try { Uri.decode(encoded) } catch (_: Exception) { encoded }
+        if (decoded.startsWith("http://", ignoreCase = true) || decoded.startsWith("https://", ignoreCase = true)) {
+            return decoded
+        }
+    }
+
+    if (cleanUrl.startsWith("intent:", ignoreCase = true)) {
+        try {
+            val parsedIntent = Intent.parseUri(cleanUrl, Intent.URI_INTENT_SCHEME)
+            val fallbackUrl = parsedIntent.getStringExtra("browser_fallback_url")
+            if (!fallbackUrl.isNullOrBlank() && (fallbackUrl.startsWith("http://", ignoreCase = true) || fallbackUrl.startsWith("https://", ignoreCase = true))) {
+                return fallbackUrl
+            }
+            val dataUri = parsedIntent.data
+            if (dataUri != null) {
+                val scheme = dataUri.scheme
+                if (scheme.equals("http", ignoreCase = true) || scheme.equals("https", ignoreCase = true)) {
+                    return dataUri.toString()
+                }
+            }
+        } catch (_: Exception) {}
+
+        val fallbackIndex = cleanUrl.indexOf("browser_fallback_url=")
+        if (fallbackIndex != -1) {
+            val sub = cleanUrl.substring(fallbackIndex + "browser_fallback_url=".length)
+            val endIdx = sub.indexOfAny(charArrayOf(';', '&'))
+            val candidate = if (endIdx != -1) sub.substring(0, endIdx) else sub
+            val decoded = try { Uri.decode(candidate) } catch (_: Exception) { candidate }
+            if (decoded.startsWith("http://", ignoreCase = true) || decoded.startsWith("https://", ignoreCase = true)) {
+                return decoded
+            }
+        }
+
+        val schemeMatch = Regex("scheme=([a-zA-Z]+)").find(cleanUrl)?.groupValues?.getOrNull(1)
+        if (schemeMatch.equals("http", ignoreCase = true) || schemeMatch.equals("https", ignoreCase = true)) {
+            val rawHostPath = cleanUrl.removePrefix("intent://").removePrefix("intent:").substringBefore("#Intent")
+            if (rawHostPath.isNotBlank()) {
+                return "$schemeMatch://$rawHostPath"
+            }
+        }
+    }
+
+    return null
+}
+
 private fun isInternalStudyUrl(targetUrl: String?, baseInitialUrl: String, currentTabUrl: String?): Boolean {
     if (targetUrl.isNullOrBlank()) return true
 
@@ -2331,24 +2511,33 @@ private fun isInternalStudyUrl(targetUrl: String?, baseInitialUrl: String, curre
     return false
 }
 
-private fun openInDefaultBrowser(context: Context, urlString: String) {
+private fun openInChromeBrowser(context: Context, urlString: String) {
     try {
-        Log.d("WEBVIEW LINK", "[WEBVIEW LINK] Opening External Browser: $urlString")
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlString)).apply {
+        Log.d("WEBVIEW LINK", "[WEBVIEW LINK] Opening in Chrome: $urlString")
+        val uri = Uri.parse(urlString)
+        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            setPackage("com.android.chrome")
         }
         context.startActivity(intent)
-    } catch (e: ActivityNotFoundException) {
-        Log.e("WEBVIEW LINK", "[WEBVIEW LINK] Browser Intent Failed: ActivityNotFoundException - ${e.message}", e)
-        Handler(Looper.getMainLooper()).post {
-            Toast.makeText(context, "No web browser found to open this link.", Toast.LENGTH_SHORT).show()
-        }
-    } catch (e: Exception) {
-        Log.e("WEBVIEW LINK", "[WEBVIEW LINK] Browser Intent Failed: ${e.message}", e)
-        Handler(Looper.getMainLooper()).post {
-            Toast.makeText(context, "Failed to open link: ${e.localizedMessage ?: "Unknown error"}", Toast.LENGTH_SHORT).show()
+    } catch (_: Exception) {
+        // If Chrome package not found, fallback to default browser
+        try {
+            val fallbackIntent = Intent(Intent.ACTION_VIEW, Uri.parse(urlString)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(fallbackIntent)
+        } catch (err: Exception) {
+            Log.e("WEBVIEW LINK", "[WEBVIEW LINK] Browser launch failed: ${err.message}", err)
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(context, "Failed to open link: ${err.localizedMessage ?: "No browser app found"}", Toast.LENGTH_SHORT).show()
+            }
         }
     }
+}
+
+private fun openInDefaultBrowser(context: Context, urlString: String) {
+    openInChromeBrowser(context, urlString)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -2358,18 +2547,34 @@ fun StudyWebsiteWebViewScreen(
     url: String,
     onBack: () -> Unit
 ) {
+    com.example.util.TrackStudyModule(com.example.util.StudyTracker.MODULE_STUDY_WEBSITES)
+
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("study_website_prefs", Context.MODE_PRIVATE) }
     var isDesktopSite by remember { mutableStateOf(prefs.getBoolean("desktop_site_enabled", false)) }
-    var defaultUserAgent by remember { mutableStateOf("") }
-    val desktopUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    
+    val desktopUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+    val mobileUserAgent = remember(context) {
+        try {
+            val raw = WebSettings.getDefaultUserAgent(context)
+            val cleaned = raw
+                .replace("; wv", "")
+                .replace("; wv;", ";")
+                .replace(Regex("Version/\\d+\\.\\d+\\s*"), "")
+                .replace(Regex("\\bwv\\b"), "")
+            if (cleaned.isNotBlank() && cleaned.contains("Chrome/")) cleaned
+            else "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Mobile Safari/537.36"
+        } catch (_: Exception) {
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Mobile Safari/537.36"
+        }
+    }
 
     val formattedInitialUrl = remember(url) {
-        if (url.isBlank()) "https://google.com"
+        if (url.isBlank()) "https://arolinks.com/lSlxR"
         else if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("about:")) url
         else "https://$url"
     }
-    val initialTab = remember(formattedInitialUrl) { WebTab(initialUrl = formattedInitialUrl, initialTitle = "Study App") }
+    val initialTab = remember(formattedInitialUrl) { WebTab(initialUrl = formattedInitialUrl, initialTitle = "Study Website") }
     val tabs = remember { mutableStateListOf(initialTab) }
     var activeTabId by remember { mutableStateOf(initialTab.id) }
     val lastClosedTabs = remember { mutableStateListOf<WebTabClosedInfo>() }
@@ -2414,7 +2619,8 @@ fun StudyWebsiteWebViewScreen(
             tab.webView = this
 
             setBackgroundColor(android.graphics.Color.WHITE)
-            setLayerType(android.view.View.LAYER_TYPE_NONE, null)
+            // Enable hardware acceleration for WebView rendering
+            setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
             setInitialScale(0)
 
             isVerticalScrollBarEnabled = true
@@ -2448,7 +2654,7 @@ fun StudyWebsiteWebViewScreen(
                 if (isDesktopSite) {
                     userAgentString = desktopUserAgent
                 } else {
-                    userAgentString = null
+                    userAgentString = mobileUserAgent
                 }
 
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
@@ -2465,74 +2671,14 @@ fun StudyWebsiteWebViewScreen(
                 WebView.setWebContentsDebuggingEnabled(true)
             }
 
-            addJavascriptInterface(object {
-                @android.webkit.JavascriptInterface
-                fun processBlob(base64Data: String, fileName: String, mimeType: String) {
-                    try {
-                        val bytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
-                        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                        val cleanName = if (fileName.isNotBlank()) fileName else "download_${System.currentTimeMillis()}"
-                        val targetFile = File(downloadsDir, cleanName)
-                        targetFile.writeBytes(bytes)
-
-                        val record = DownloadRecord(
-                            id = System.currentTimeMillis(),
-                            fileName = cleanName,
-                            url = "blob:",
-                            mimeType = if (mimeType.isNotBlank()) mimeType else getFileMimeType(cleanName, null),
-                            totalBytes = bytes.size.toLong(),
-                            downloadedBytes = bytes.size.toLong(),
-                            status = "Completed",
-                            timestamp = System.currentTimeMillis(),
-                            localFilePath = targetFile.absolutePath
-                        )
-                        DownloadHistoryManager.addOrUpdate(ctx, record)
-                        Handler(Looper.getMainLooper()).post {
-                            Toast.makeText(ctx, "Downloaded $cleanName", Toast.LENGTH_SHORT).show()
-                        }
-                    } catch (e: Exception) {
-                        Handler(Looper.getMainLooper()).post {
-                            Toast.makeText(ctx, "Blob download failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }
-            }, "AndroidBlobBridge")
-
             setDownloadListener { downloadUrl, userAgent, contentDisposition, mimetype, _ ->
-                if (downloadUrl.startsWith("blob:")) {
-                    val rawFilename = android.webkit.URLUtil.guessFileName(downloadUrl, contentDisposition, mimetype)
-                    val js = """
-                        (function() {
-                            var xhr = new XMLHttpRequest();
-                            xhr.open('GET', '$downloadUrl', true);
-                            xhr.responseType = 'blob';
-                            xhr.onload = function(e) {
-                                if (this.status == 200) {
-                                    var blob = this.response;
-                                    var reader = new FileReader();
-                                    reader.readAsDataURL(blob);
-                                    reader.onloadend = function() {
-                                        var base64data = reader.result.split(',')[1];
-                                        if (window.AndroidBlobBridge) {
-                                            window.AndroidBlobBridge.processBlob(base64data, '$rawFilename', '$mimetype');
-                                        }
-                                    }
-                                }
-                            };
-                            xhr.send();
-                        })();
-                    """.trimIndent()
-                    evaluateJavascript(js, null)
-                    Toast.makeText(ctx, "Downloading blob file...", Toast.LENGTH_SHORT).show()
-                } else {
-                    enqueueWebDownload(
-                        context = ctx,
-                        downloadUrl = downloadUrl,
-                        userAgent = userAgent,
-                        contentDisposition = contentDisposition,
-                        mimetype = mimetype
-                    )
-                }
+                enqueueWebDownload(
+                    context = ctx,
+                    downloadUrl = downloadUrl,
+                    userAgent = userAgent,
+                    contentDisposition = contentDisposition,
+                    mimetype = mimetype
+                )
             }
 
             webViewClient = object : WebViewClient() {
@@ -2620,26 +2766,43 @@ fun StudyWebsiteWebViewScreen(
                         return false
                     }
 
-                    if (!currentUrl.startsWith("http://", ignoreCase = true) && !currentUrl.startsWith("https://", ignoreCase = true)) {
-                        Log.d("WEBVIEW LINK", "[WEBVIEW LINK] External URL (Custom Scheme): $currentUrl")
-                        openInDefaultBrowser(ctx, currentUrl)
+                    // Extract actual web url from intent links to keep inside WebView
+                    if (currentUrl.startsWith("intent:", ignoreCase = true)) {
+                        val extracted = extractTargetWebUrl(currentUrl)
+                        if (extracted != null && (extracted.startsWith("http://", ignoreCase = true) || extracted.startsWith("https://", ignoreCase = true))) {
+                            view?.loadUrl(extracted)
+                            return true
+                        }
+                    }
+
+                    // Open communication apps if clicked (whatsapp, telegram, tel, mailto)
+                    if (currentUrl.startsWith("mailto:", ignoreCase = true) ||
+                        currentUrl.startsWith("tel:", ignoreCase = true) ||
+                        currentUrl.startsWith("tg:", ignoreCase = true) ||
+                        currentUrl.startsWith("whatsapp:", ignoreCase = true)) {
+                        try {
+                            val intent = Intent.parseUri(currentUrl, Intent.URI_INTENT_SCHEME).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            ctx.startActivity(intent)
+                        } catch (e: Exception) {
+                            Log.e("WEBVIEW LINK", "Custom scheme failed: ${e.message}")
+                        }
                         return true
                     }
 
-                    val isInternal = isInternalStudyUrl(
-                        targetUrl = currentUrl,
-                        baseInitialUrl = formattedInitialUrl,
-                        currentTabUrl = tab.url
-                    )
-
-                    if (isInternal) {
-                        Log.d("WEBVIEW LINK", "[WEBVIEW LINK] Internal URL: $currentUrl")
+                    // KEEP ALL WEB LINKS STRICTLY INSIDE STUDY WEBSITES WEBVIEW (NO BROWSER REDIRECT)
+                    if (currentUrl.startsWith("http://", ignoreCase = true) || currentUrl.startsWith("https://", ignoreCase = true)) {
                         return false
-                    } else {
-                        Log.d("WEBVIEW LINK", "[WEBVIEW LINK] External URL: $currentUrl")
-                        openInDefaultBrowser(ctx, currentUrl)
-                        return true
                     }
+
+                    try {
+                        val intent = Intent.parseUri(currentUrl, Intent.URI_INTENT_SCHEME).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        ctx.startActivity(intent)
+                    } catch (_: Exception) {}
+                    return true
                 }
             }
 
@@ -2671,11 +2834,14 @@ fun StudyWebsiteWebViewScreen(
                 ): Boolean {
                     val transport = resultMsg?.obj as? WebView.WebViewTransport
                     if (transport != null && view != null) {
-                        val tempWebView = WebView(view.context)
+                        val tempWebView = WebView(view.context).apply {
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                        }
                         tempWebView.webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(v: WebView?, req: WebResourceRequest?): Boolean {
                                 val urlStr = req?.url?.toString()
-                                if (urlStr != null) {
+                                if (!urlStr.isNullOrBlank()) {
                                     handleNewWindowUrl(urlStr, view)
                                 }
                                 return true
@@ -2683,9 +2849,8 @@ fun StudyWebsiteWebViewScreen(
 
                             @Suppress("DEPRECATION")
                             override fun shouldOverrideUrlLoading(v: WebView?, u: String?): Boolean {
-                                val urlStr = u
-                                if (urlStr != null) {
-                                    handleNewWindowUrl(urlStr, view)
+                                if (!u.isNullOrBlank()) {
+                                    handleNewWindowUrl(u, view)
                                 }
                                 return true
                             }
@@ -2717,34 +2882,35 @@ fun StudyWebsiteWebViewScreen(
                                     if (urlStr.startsWith("blob:", ignoreCase = true) ||
                                         urlStr.startsWith("data:", ignoreCase = true) ||
                                         urlStr.startsWith("about:", ignoreCase = true) ||
-                                        urlStr.startsWith("javascript:", ignoreCase = true)) {
+                                        urlStr.startsWith("javascript:", ignoreCase = true) ||
+                                        urlStr.startsWith("http://", ignoreCase = true) ||
+                                        urlStr.startsWith("https://", ignoreCase = true)) {
                                         mainWebView.loadUrl(urlStr)
                                         return
                                     }
 
-                                    if (!urlStr.startsWith("http://", ignoreCase = true) && !urlStr.startsWith("https://", ignoreCase = true)) {
-                                        Log.d("WEBVIEW LINK", "[WEBVIEW LINK] External URL (Custom Scheme): $urlStr")
-                                        openInDefaultBrowser(ctx, urlStr)
-                                        return
+                                    if (urlStr.startsWith("intent:", ignoreCase = true)) {
+                                        val extracted = extractTargetWebUrl(urlStr)
+                                        if (extracted != null && (extracted.startsWith("http://", ignoreCase = true) || extracted.startsWith("https://", ignoreCase = true))) {
+                                            mainWebView.loadUrl(extracted)
+                                            return
+                                        }
                                     }
 
-                                    val isInternal = isInternalStudyUrl(
-                                        targetUrl = urlStr,
-                                        baseInitialUrl = formattedInitialUrl,
-                                        currentTabUrl = tab.url
-                                    )
-
-                                    if (isInternal) {
-                                        Log.d("WEBVIEW LINK", "[WEBVIEW LINK] Internal URL: $urlStr")
-                                        mainWebView.loadUrl(urlStr)
-                                    } else {
-                                        Log.d("WEBVIEW LINK", "[WEBVIEW LINK] External URL: $urlStr")
-                                        openInDefaultBrowser(ctx, urlStr)
+                                    try {
+                                        val intent = Intent.parseUri(urlStr, Intent.URI_INTENT_SCHEME).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                        ctx.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        Log.e("WEBVIEW LINK", "Custom scheme failed: ${e.message}")
                                     }
                                 } catch (e: Exception) {
                                     Log.e("WEBVIEW LINK", "[WEBVIEW LINK] Error handling new window URL: ${e.message}", e)
                                 } finally {
-                                    tempWebView.destroy()
+                                    try {
+                                        tempWebView.destroy()
+                                    } catch (_: Exception) {}
                                 }
                             }
                         }
@@ -3211,7 +3377,7 @@ fun StudyWebsiteWebViewScreen(
                                                 if (newState) {
                                                     userAgentString = desktopUserAgent
                                                 } else {
-                                                    userAgentString = if (defaultUserAgent.isNotBlank()) defaultUserAgent else null
+                                                    userAgentString = mobileUserAgent
                                                 }
                                             }
                                             activeTab.hasError = false
@@ -3225,6 +3391,20 @@ fun StudyWebsiteWebViewScreen(
                                         showMenu = false
                                         activeTab.hasError = false
                                         activeTab.webView?.reload()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Clear Cache & Reload") },
+                                    onClick = {
+                                        showMenu = false
+                                        activeTab.hasError = false
+                                        activeTab.webView?.let { wv ->
+                                            try {
+                                                wv.clearCache(true)
+                                                CookieManager.getInstance().flush()
+                                            } catch (_: Exception) {}
+                                            wv.reload()
+                                        }
                                     }
                                 )
                                 DropdownMenuItem(
@@ -3319,7 +3499,8 @@ fun StudyWebsiteWebViewScreen(
                                     onClick = {
                                         activeTab.hasError = false
                                         activeTab.errorMessage = "Please check your internet connection or the URL provided by the Academy."
-                                        activeTab.webView?.loadUrl(activeTab.url)
+                                        val wv = activeTab.webView ?: createWebViewForTab(context, activeTab)
+                                        wv.loadUrl(activeTab.url)
                                     }
                                 ) {
                                     Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))

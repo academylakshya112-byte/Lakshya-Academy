@@ -248,6 +248,102 @@ interface AcademyDao {
 
     @Query("DELETE FROM study_website_favorites WHERE userEmail = :userEmail AND websiteId = :websiteId")
     suspend fun deleteStudyWebsiteFavorite(userEmail: String, websiteId: String)
+
+    // === Focus Study Mode DAOs ===
+    @Query("SELECT * FROM focus_settings WHERE userEmail = :userEmail LIMIT 1")
+    fun getFocusSetting(userEmail: String): Flow<FocusSettingEntity?>
+
+    @Query("SELECT * FROM focus_settings WHERE userEmail = :userEmail LIMIT 1")
+    suspend fun getFocusSettingDirect(userEmail: String): FocusSettingEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrUpdateFocusSetting(setting: FocusSettingEntity)
+
+    // Focus Sessions
+    @Query("SELECT * FROM focus_sessions WHERE userEmail = :userEmail ORDER BY startTime DESC")
+    fun getAllFocusSessions(userEmail: String): Flow<List<FocusSessionEntity>>
+
+    @Query("SELECT * FROM focus_sessions WHERE userEmail = :userEmail AND dateStr = :dateStr ORDER BY startTime DESC")
+    fun getFocusSessionsForDate(userEmail: String, dateStr: String): Flow<List<FocusSessionEntity>>
+
+    @Query("SELECT * FROM focus_sessions WHERE userEmail = :userEmail AND dateStr = :dateStr ORDER BY startTime DESC")
+    suspend fun getFocusSessionsForDateDirect(userEmail: String, dateStr: String): List<FocusSessionEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertFocusSession(session: FocusSessionEntity): Long
+
+    @Query("DELETE FROM focus_sessions WHERE id = :id")
+    suspend fun deleteFocusSession(id: Int)
+
+    // Blocked Apps
+    @Query("SELECT * FROM blocked_apps WHERE userEmail = :userEmail ORDER BY appName ASC")
+    fun getBlockedApps(userEmail: String): Flow<List<BlockedAppEntity>>
+
+    @Query("SELECT * FROM blocked_apps WHERE userEmail = :userEmail")
+    suspend fun getBlockedAppsDirect(userEmail: String): List<BlockedAppEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertBlockedApp(app: BlockedAppEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertBlockedApps(apps: List<BlockedAppEntity>)
+
+    @Query("DELETE FROM blocked_apps WHERE userEmail = :userEmail AND packageName = :packageName")
+    suspend fun deleteBlockedApp(userEmail: String, packageName: String)
+
+    @Query("DELETE FROM blocked_apps WHERE userEmail = :userEmail")
+    suspend fun deleteAllBlockedApps(userEmail: String)
+
+    // Blocked Websites
+    @Query("SELECT * FROM blocked_websites WHERE userEmail = :userEmail ORDER BY id DESC")
+    fun getBlockedWebsites(userEmail: String): Flow<List<BlockedWebsiteEntity>>
+
+    @Query("SELECT * FROM blocked_websites WHERE userEmail = :userEmail")
+    suspend fun getBlockedWebsitesDirect(userEmail: String): List<BlockedWebsiteEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertBlockedWebsite(website: BlockedWebsiteEntity): Long
+
+    @Query("DELETE FROM blocked_websites WHERE id = :id")
+    suspend fun deleteBlockedWebsite(id: Int)
+
+    @Query("DELETE FROM blocked_websites WHERE userEmail = :userEmail")
+    suspend fun deleteAllBlockedWebsites(userEmail: String)
+
+    // Study Channels
+    @Query("SELECT * FROM study_channels WHERE userEmail = :userEmail ORDER BY id ASC")
+    fun getStudyChannels(userEmail: String): Flow<List<StudyChannelEntity>>
+
+    @Query("SELECT * FROM study_channels WHERE userEmail = :userEmail")
+    suspend fun getStudyChannelsDirect(userEmail: String): List<StudyChannelEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertStudyChannel(channel: StudyChannelEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertStudyChannels(channels: List<StudyChannelEntity>)
+
+    @Query("DELETE FROM study_channels WHERE id = :id")
+    suspend fun deleteStudyChannel(id: Int)
+
+    @Query("DELETE FROM study_channels WHERE userEmail = :userEmail")
+    suspend fun deleteAllStudyChannels(userEmail: String)
+
+    // Focus Planner Tasks
+    @Query("SELECT * FROM focus_planner_tasks WHERE userEmail = :userEmail ORDER BY id DESC")
+    fun getFocusPlannerTasks(userEmail: String): Flow<List<FocusTaskEntity>>
+
+    @Query("SELECT * FROM focus_planner_tasks WHERE userEmail = :userEmail ORDER BY id DESC")
+    suspend fun getFocusPlannerTasksDirect(userEmail: String): List<FocusTaskEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertFocusPlannerTask(task: FocusTaskEntity): Long
+
+    @Update
+    suspend fun updateFocusPlannerTask(task: FocusTaskEntity)
+
+    @Query("DELETE FROM focus_planner_tasks WHERE id = :id")
+    suspend fun deleteFocusPlannerTask(id: Int)
 }
 
 @Database(
@@ -273,9 +369,15 @@ interface AcademyDao {
         FreeBookFolderEntity::class,
         FreeBookFileEntity::class,
         StudyWebsiteEntity::class,
-        StudyWebsiteFavoriteEntity::class
+        StudyWebsiteFavoriteEntity::class,
+        FocusSettingEntity::class,
+        FocusSessionEntity::class,
+        FocusTaskEntity::class,
+        BlockedAppEntity::class,
+        BlockedWebsiteEntity::class,
+        StudyChannelEntity::class
     ],
-    version = 21,
+    version = 23,
     exportSchema = false
 )
 abstract class AcademyDatabase : RoomDatabase() {

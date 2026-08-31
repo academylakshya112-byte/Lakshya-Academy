@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">SHADOW X RAHUL</string>
+    <string name="accessibility_service_description">SHADOW X RAHUL Focus Study Mode uses Accessibility Service to detect distracting apps and unapproved websites during active study sessions and display the focus study reminder screen.</string>
 </resources>

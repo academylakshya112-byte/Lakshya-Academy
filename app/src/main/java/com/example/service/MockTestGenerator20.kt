@@ -72,9 +72,9 @@ object MockTestGenerator20 {
     }
 
     private suspend fun callGemini(prompt: String): String = withContext(Dispatchers.IO) {
-        val apiKey = BuildConfig.GEMINI_API_KEY
-        if (apiKey.isBlank() || apiKey == "YOUR_GEMINI_API_KEY" || apiKey == "placeholder") {
-            throw Exception("Valid Gemini API Key is missing. Please configure it in the Secrets panel.")
+        val apiKey = BuildConfig.LAKSHYA_GEMINI_API_KEY
+        if (apiKey.isBlank() || apiKey == "YOUR_GEMINI_API_KEY" || apiKey == "YOUR_LAKSHYA_GEMINI_API_KEY" || apiKey == "placeholder") {
+            throw Exception("Valid Gemini API Key is missing. Please configure LAKSHYA_GEMINI_API_KEY in the Secrets panel.")
         }
 
         val request = GenerateContentRequest(

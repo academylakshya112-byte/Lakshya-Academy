@@ -1796,12 +1796,17 @@ fun AdminCommunityPopupScreen(viewModel: AcademyViewModel) {
     val scope = rememberCoroutineScope()
     val popupConfig = viewModel.communityPopupConfig
 
-    var enabled by remember(popupConfig) { mutableStateOf(popupConfig.enabled) }
-    var title by remember(popupConfig) { mutableStateOf(popupConfig.title) }
-    var description by remember(popupConfig) { mutableStateOf(popupConfig.description) }
-    var imageUrl by remember(popupConfig) { mutableStateOf(popupConfig.imageUrl) }
-    var whatsappUrl by remember(popupConfig) { mutableStateOf(popupConfig.whatsappUrl) }
-    var telegramUrl by remember(popupConfig) { mutableStateOf(popupConfig.telegramUrl) }
+    // Fetch latest config from remote on launch
+    LaunchedEffect(Unit) {
+        viewModel.fetchCommunityPopup()
+    }
+
+    var enabled by remember(popupConfig.id) { mutableStateOf(popupConfig.enabled) }
+    var title by remember(popupConfig.id) { mutableStateOf(popupConfig.title) }
+    var description by remember(popupConfig.id) { mutableStateOf(popupConfig.description) }
+    var imageUrl by remember(popupConfig.id) { mutableStateOf(popupConfig.imageUrl) }
+    var whatsappUrl by remember(popupConfig.id) { mutableStateOf(popupConfig.whatsappUrl) }
+    var telegramUrl by remember(popupConfig.id) { mutableStateOf(popupConfig.telegramUrl) }
 
     var isUploadingImage by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
@@ -1931,8 +1936,9 @@ fun AdminCommunityPopupScreen(viewModel: AcademyViewModel) {
                                     .clip(RoundedCornerShape(12.dp))
                                     .background(MaterialTheme.colorScheme.surfaceVariant)
                             ) {
+                                val resolvedImg = com.example.service.MediaStorageServiceFactory.getService(context).resolveMediaUrl(imageUrl)
                                 AsyncImage(
-                                    model = imageUrl,
+                                    model = resolvedImg,
                                     contentDescription = "Popup Image Preview",
                                     modifier = Modifier.fillMaxSize(),
                                     contentScale = ContentScale.Crop

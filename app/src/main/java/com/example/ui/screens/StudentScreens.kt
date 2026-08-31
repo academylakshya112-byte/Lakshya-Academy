@@ -9,6 +9,7 @@ import android.provider.MediaStore
 import android.widget.Toast
 import java.io.OutputStream
 import androidx.compose.foundation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -44,6 +45,99 @@ import com.example.ui.theme.*
 import com.example.ui.viewmodel.AcademyViewModel
 
 @Composable
+fun AnimatedAppsIcon() {
+    val infiniteTransition = rememberInfiniteTransition(label = "apps_icon_anim")
+    
+    // Scale breathing effect
+    val scale by infiniteTransition.animateFloat(
+        initialValue = 0.92f,
+        targetValue = 1.08f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "scale"
+    )
+
+    // Breathing glow alpha for the gradient blocks
+    val glowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.7f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "glowAlpha"
+    )
+
+    Box(
+        modifier = Modifier
+            .size(24.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(2.5.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(2.5.dp)) {
+                // Top-Left Block (Deep Blue)
+                Box(
+                    modifier = Modifier
+                        .size(9.5.dp)
+                        .clip(RoundedCornerShape(2.5.dp))
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(Color(0xFF2563EB), Color(0xFF1E40AF))
+                            )
+                        )
+                )
+                // Top-Right Block (Indigo)
+                Box(
+                    modifier = Modifier
+                        .size(9.5.dp)
+                        .clip(RoundedCornerShape(2.5.dp))
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(Color(0xFF4F46E5), Color(0xFF3730A3))
+                            )
+                        )
+                        .graphicsLayer { alpha = glowAlpha }
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(2.5.dp)) {
+                // Bottom-Left Block (Teal/Cyan)
+                Box(
+                    modifier = Modifier
+                        .size(9.5.dp)
+                        .clip(RoundedCornerShape(2.5.dp))
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(Color(0xFF06B6D4), Color(0xFF0891B2))
+                            )
+                        )
+                        .graphicsLayer { alpha = glowAlpha }
+                )
+                // Bottom-Right Block (Pink/Red Accent)
+                Box(
+                    modifier = Modifier
+                        .size(9.5.dp)
+                        .clip(RoundedCornerShape(2.5.dp))
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(Color(0xFFEC4899), Color(0xFFE11D48))
+                            )
+                        )
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun Academic3x3GridDashboard(onTabSelect: (String) -> Unit) {
     val items = listOf(
         Triple("Live Classes", Icons.Default.LiveTv, "live_classes"),
@@ -56,7 +150,7 @@ fun Academic3x3GridDashboard(onTabSelect: (String) -> Unit) {
         Triple("My Progress", Icons.Default.Leaderboard, "DASHBOARD"),
         Triple("Free Books", Icons.Default.AutoStories, "books"),
         Triple("Time Table", Icons.Default.CalendarMonth, "timetable"),
-        Triple("Study Apps", Icons.Default.Language, "study_websites")
+        Triple("Study Apps", Icons.Default.Apps, "study_websites")
     )
 
     Column(
@@ -70,14 +164,29 @@ fun Academic3x3GridDashboard(onTabSelect: (String) -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 rowItems.forEach { (label, icon, route) ->
+                    val isStudyApps = route == "study_websites"
+
                     Card(
                         onClick = { onTabSelect(route) },
                         modifier = Modifier
                             .weight(1f)
-                            .aspectRatio(1f),
+                            .aspectRatio(1f)
+                            .then(
+                                if (isStudyApps) {
+                                    Modifier.border(
+                                        width = 1.dp,
+                                        brush = Brush.linearGradient(
+                                            colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6))
+                                        ),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                } else Modifier
+                            ),
                         shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isStudyApps) Color(0xFFF8FAFC) else Color.White
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = if (isStudyApps) 2.dp else 1.dp)
                     ) {
                         Column(
                             modifier = Modifier.fillMaxSize(),
@@ -88,10 +197,16 @@ fun Academic3x3GridDashboard(onTabSelect: (String) -> Unit) {
                                 modifier = Modifier
                                     .size(42.dp)
                                     .clip(CircleShape)
-                                    .background(BrandBluePrimary.copy(alpha = 0.08f)),
+                                    .background(
+                                        if (isStudyApps) Color(0xFFEEF2F6) else BrandBluePrimary.copy(alpha = 0.08f)
+                                    ),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Icon(icon, contentDescription = label, tint = BrandBluePrimary, modifier = Modifier.size(20.dp))
+                                if (isStudyApps) {
+                                    AnimatedAppsIcon()
+                                } else {
+                                    Icon(icon, contentDescription = label, tint = BrandBluePrimary, modifier = Modifier.size(20.dp))
+                                }
                             }
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
@@ -100,7 +215,8 @@ fun Academic3x3GridDashboard(onTabSelect: (String) -> Unit) {
                                 fontWeight = FontWeight.Bold,
                                 textAlign = TextAlign.Center,
                                 lineHeight = 12.sp,
-                                modifier = Modifier.padding(horizontal = 4.dp)
+                                modifier = Modifier.padding(horizontal = 4.dp),
+                                color = if (isStudyApps) Color(0xFF1E293B) else Color.Unspecified
                             )
                         }
                     }

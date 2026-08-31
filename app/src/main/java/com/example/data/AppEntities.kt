@@ -463,6 +463,108 @@ data class StudyWebsiteFavoriteEntity(
     val favoritedAt: Long = System.currentTimeMillis()
 )
 
+// === Focus Study Mode Entities ===
+
+@Entity(tableName = "focus_settings")
+data class FocusSettingEntity(
+    @PrimaryKey val userEmail: String,
+    @Json(name = "daily_goal_minutes") val dailyGoalMinutes: Int = 240,
+    @Json(name = "weekly_goal_minutes") val weeklyGoalMinutes: Int = 1440,
+    @Json(name = "pomodoro_study_minutes") val pomodoroStudyMinutes: Int = 25,
+    @Json(name = "pomodoro_short_break_minutes") val pomodoroShortBreakMinutes: Int = 5,
+    @Json(name = "pomodoro_long_break_minutes") val pomodoroLongBreakMinutes: Int = 15,
+    @Json(name = "pomodoro_cycles") val pomodoroCycles: Int = 4,
+    @Json(name = "pause_blocking_during_breaks") val pauseBlockingDuringBreaks: Boolean = true,
+    @Json(name = "strict_mode_enabled") val strictModeEnabled: Boolean = false,
+    @Json(name = "block_shorts_and_reels") val blockShortsAndReels: Boolean = true,
+    @Json(name = "block_notifications") val blockNotifications: Boolean = false,
+    @Json(name = "selected_music_type") val selectedMusicType: String = "RAIN",
+    @Json(name = "music_volume") val musicVolume: Float = 0.7f,
+    @Json(name = "auto_stop_music_with_timer") val autoStopMusicWithTimer: Boolean = true,
+    @Json(name = "focus_theme") val focusTheme: String = "SHADOW_DARK",
+    @Json(name = "auto_start_break") val autoStartBreak: Boolean = false,
+    @Json(name = "auto_start_next_session") val autoStartNextSession: Boolean = false,
+    @Json(name = "sound_enabled") val soundEnabled: Boolean = true,
+    @Json(name = "vibration_enabled") val vibrationEnabled: Boolean = true,
+    @Json(name = "study_reminder_enabled") val studyReminderEnabled: Boolean = true,
+    @Json(name = "break_reminder_enabled") val breakReminderEnabled: Boolean = true,
+    @Json(name = "goal_reminder_enabled") val goalReminderEnabled: Boolean = true,
+    @Json(name = "streak_reminder_enabled") val streakReminderEnabled: Boolean = true,
+    @Json(name = "planner_reminder_enabled") val plannerReminderEnabled: Boolean = true,
+    @Json(name = "updated_at") val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "focus_sessions")
+data class FocusSessionEntity(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    @Json(name = "user_email") val userEmail: String,
+    @Json(name = "start_time") val startTime: Long,
+    @Json(name = "end_time") val endTime: Long,
+    @Json(name = "duration_minutes") val durationMinutes: Int,
+    @Json(name = "session_type") val sessionType: String = "STANDARD", // STANDARD, POMODORO, CUSTOM_POMODORO
+    @Json(name = "apps_blocked_count") val appsBlockedCount: Int = 0,
+    @Json(name = "completed") val completed: Boolean = true,
+    @Json(name = "date_str") val dateStr: String, // e.g. "2026-08-30"
+    @Json(name = "pomodoro_cycles_completed") val pomodoroCyclesCompleted: Int = 0,
+    @Json(name = "subject") val subject: String = "Mathematics",
+    @Json(name = "chapter") val chapter: String = "",
+    @Json(name = "topic") val topic: String = "",
+    @Json(name = "target") val target: String = "",
+    @Json(name = "notes") val notes: String = "",
+    @Json(name = "xp_earned") val xpEarned: Int = 0
+)
+
+@Entity(tableName = "focus_planner_tasks")
+data class FocusTaskEntity(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    @Json(name = "user_email") val userEmail: String,
+    @Json(name = "subject") val subject: String,
+    @Json(name = "chapter") val chapter: String = "",
+    @Json(name = "topic") val topic: String = "",
+    @Json(name = "start_time_str") val startTimeStr: String = "07:00 PM",
+    @Json(name = "end_time_str") val endTimeStr: String = "08:00 PM",
+    @Json(name = "duration_minutes") val durationMinutes: Int = 60,
+    @Json(name = "priority") val priority: String = "Medium", // High, Medium, Low
+    @Json(name = "has_reminder") val hasReminder: Boolean = true,
+    @Json(name = "repeat_option") val repeatOption: String = "Daily", // Once, Daily, Weekdays
+    @Json(name = "is_completed") val isCompleted: Boolean = false,
+    @Json(name = "created_at") val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "blocked_apps",
+    primaryKeys = ["userEmail", "packageName"]
+)
+data class BlockedAppEntity(
+    val userEmail: String,
+    val packageName: String,
+    val appName: String,
+    val isBlocked: Boolean = true,
+    val isPreset: Boolean = false
+)
+
+@Entity(tableName = "blocked_websites")
+data class BlockedWebsiteEntity(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val userEmail: String,
+    val domain: String,
+    val isBlocked: Boolean = true,
+    val isEducationalAllowed: Boolean = false
+)
+
+@Entity(tableName = "study_channels")
+data class StudyChannelEntity(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val userEmail: String,
+    val channelName: String,
+    val channelHandle: String = "",
+    val channelLogoUrl: String = "",
+    val subscriberCount: String = "",
+    val isApproved: Boolean = true,
+    val isCustom: Boolean = false
+)
+
+
 
 
 

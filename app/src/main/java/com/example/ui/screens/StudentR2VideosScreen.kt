@@ -543,7 +543,7 @@ fun StudentR2VideosScreen(
                                     ) {
                                         if (enrolledCourses.isNotEmpty()) {
                                             item {
-                                                SectionHeader(title = "Active Enrollment Batches (सक्रिय बैच)")
+                                                SectionHeader(title = "🎧 Study Break Zone")
                                             }
                                             items(items = enrolledCourses) { course ->
                                                 R2BatchCard(
@@ -1275,7 +1275,7 @@ fun StudentR2VideosScreen(
 
                                                                     scope.launch {
                                                                         try {
-                                                                            val rawKey = BuildConfig.GEMINI_API_KEY
+                                                                            val rawKey = BuildConfig.LAKSHYA_GEMINI_API_KEY
                                                                             val key = rawKey.trim().removeSurrounding("\"").removeSurrounding("'").trim()
                                                                             val response = com.example.api.RetrofitClient.service.generateContent(
                                                                                 fullPath = "v1beta/models/gemini-2.5-flash:generateContent",
@@ -2079,7 +2079,7 @@ fun StudentR2VideosScreen(
 
                                                                     scope.launch {
                                                                         try {
-                                                                            val rawKey = BuildConfig.GEMINI_API_KEY
+                                                                            val rawKey = BuildConfig.LAKSHYA_GEMINI_API_KEY
                                                                             val key = rawKey.trim().removeSurrounding("\"").removeSurrounding("'").trim()
                                                                             val response = com.example.api.RetrofitClient.service.generateContent(
                                                                                 fullPath = "v1beta/models/gemini-2.5-flash:generateContent",
@@ -2491,23 +2491,11 @@ fun R2BatchCard(
                 }
             }
 
-            Row(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(12.dp)
             ) {
-                Column {
-                    Text(
-                        text = if (course.isFree) "FREE" else "₹${course.price.toInt()}",
-                        fontWeight = FontWeight.Black,
-                        fontSize = 18.sp,
-                        color = if (course.isFree) Color(0xFF10B981) else Color(0xFF1E293B)
-                    )
-                    Text("Validity: 1 Year", fontSize = 11.sp, color = Color.Gray)
-                }
-                
                 Button(
                     onClick = {
                         if (isEnrolled) {
@@ -2516,7 +2504,9 @@ fun R2BatchCard(
                             onEnrollClick()
                         }
                     },
-                    modifier = Modifier.height(40.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(42.dp),
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (isEnrolled) Color(0xFF10B981) else Color(0xFF6366F1)
@@ -2524,7 +2514,7 @@ fun R2BatchCard(
                     contentPadding = PaddingValues(horizontal = 16.dp)
                 ) {
                     Text(
-                        text = if (isEnrolled) "Continue Learning" else "Enroll Now",
+                        text = if (isEnrolled) "Continue Play" else "Play Music",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp

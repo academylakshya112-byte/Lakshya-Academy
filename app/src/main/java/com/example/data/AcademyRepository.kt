@@ -1507,5 +1507,120 @@ data class SupabaseLiveClassResult(
             }
         }
     }
+
+    // === Focus Study Mode Methods ===
+
+    fun getFocusSetting(userEmail: String): Flow<FocusSettingEntity?> =
+        academyDao.getFocusSetting(userEmail)
+
+    suspend fun getFocusSettingDirect(userEmail: String): FocusSettingEntity? = withContext(Dispatchers.IO) {
+        academyDao.getFocusSettingDirect(userEmail)
+    }
+
+    suspend fun saveFocusSetting(setting: FocusSettingEntity) = withContext(Dispatchers.IO) {
+        academyDao.insertOrUpdateFocusSetting(setting)
+    }
+
+    fun getAllFocusSessions(userEmail: String): Flow<List<FocusSessionEntity>> =
+        academyDao.getAllFocusSessions(userEmail)
+
+    fun getFocusSessionsForDate(userEmail: String, dateStr: String): Flow<List<FocusSessionEntity>> =
+        academyDao.getFocusSessionsForDate(userEmail, dateStr)
+
+    suspend fun insertFocusSession(session: FocusSessionEntity): Long = withContext(Dispatchers.IO) {
+        academyDao.insertFocusSession(session)
+    }
+
+    suspend fun deleteFocusSession(id: Int) = withContext(Dispatchers.IO) {
+        academyDao.deleteFocusSession(id)
+    }
+
+    // Blocked Apps
+    fun getBlockedApps(userEmail: String): Flow<List<BlockedAppEntity>> =
+        academyDao.getBlockedApps(userEmail)
+
+    suspend fun getBlockedAppsDirect(userEmail: String): List<BlockedAppEntity> = withContext(Dispatchers.IO) {
+        academyDao.getBlockedAppsDirect(userEmail)
+    }
+
+    suspend fun insertBlockedApp(app: BlockedAppEntity) = withContext(Dispatchers.IO) {
+        academyDao.insertBlockedApp(app)
+    }
+
+    suspend fun insertBlockedApps(apps: List<BlockedAppEntity>) = withContext(Dispatchers.IO) {
+        academyDao.insertBlockedApps(apps)
+    }
+
+    suspend fun deleteBlockedApp(userEmail: String, packageName: String) = withContext(Dispatchers.IO) {
+        academyDao.deleteBlockedApp(userEmail, packageName)
+    }
+
+    suspend fun deleteAllBlockedApps(userEmail: String) = withContext(Dispatchers.IO) {
+        academyDao.deleteAllBlockedApps(userEmail)
+    }
+
+    // Blocked Websites
+    fun getBlockedWebsites(userEmail: String): Flow<List<BlockedWebsiteEntity>> =
+        academyDao.getBlockedWebsites(userEmail)
+
+    suspend fun getBlockedWebsitesDirect(userEmail: String): List<BlockedWebsiteEntity> = withContext(Dispatchers.IO) {
+        academyDao.getBlockedWebsitesDirect(userEmail)
+    }
+
+    suspend fun insertBlockedWebsite(website: BlockedWebsiteEntity): Long = withContext(Dispatchers.IO) {
+        academyDao.insertBlockedWebsite(website)
+    }
+
+    suspend fun deleteBlockedWebsite(id: Int) = withContext(Dispatchers.IO) {
+        academyDao.deleteBlockedWebsite(id)
+    }
+
+    suspend fun deleteAllBlockedWebsites(userEmail: String) = withContext(Dispatchers.IO) {
+        academyDao.deleteAllBlockedWebsites(userEmail)
+    }
+
+    // Study Channels
+    fun getStudyChannels(userEmail: String): Flow<List<StudyChannelEntity>> =
+        academyDao.getStudyChannels(userEmail)
+
+    suspend fun getStudyChannelsDirect(userEmail: String): List<StudyChannelEntity> = withContext(Dispatchers.IO) {
+        academyDao.getStudyChannelsDirect(userEmail)
+    }
+
+    suspend fun insertStudyChannel(channel: StudyChannelEntity): Long = withContext(Dispatchers.IO) {
+        academyDao.insertStudyChannel(channel)
+    }
+
+    suspend fun insertStudyChannels(channels: List<StudyChannelEntity>) = withContext(Dispatchers.IO) {
+        academyDao.insertStudyChannels(channels)
+    }
+
+    suspend fun deleteStudyChannel(id: Int) = withContext(Dispatchers.IO) {
+        academyDao.deleteStudyChannel(id)
+    }
+
+    suspend fun deleteAllStudyChannels(userEmail: String) = withContext(Dispatchers.IO) {
+        academyDao.deleteAllStudyChannels(userEmail)
+    }
+
+    // Focus Planner Tasks
+    fun getFocusPlannerTasks(userEmail: String): Flow<List<FocusTaskEntity>> =
+        academyDao.getFocusPlannerTasks(userEmail)
+
+    suspend fun getFocusPlannerTasksDirect(userEmail: String): List<FocusTaskEntity> = withContext(Dispatchers.IO) {
+        academyDao.getFocusPlannerTasksDirect(userEmail)
+    }
+
+    suspend fun insertFocusPlannerTask(task: FocusTaskEntity): Long = withContext(Dispatchers.IO) {
+        academyDao.insertFocusPlannerTask(task)
+    }
+
+    suspend fun updateFocusPlannerTask(task: FocusTaskEntity) = withContext(Dispatchers.IO) {
+        academyDao.updateFocusPlannerTask(task)
+    }
+
+    suspend fun deleteFocusPlannerTask(id: Int) = withContext(Dispatchers.IO) {
+        academyDao.deleteFocusPlannerTask(id)
+    }
 }
 

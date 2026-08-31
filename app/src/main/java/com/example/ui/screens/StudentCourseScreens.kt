@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -150,12 +151,13 @@ fun StudentHomeDashboard(
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
-                label = { Text("Search Courses / Batches (कोर्स खोजें)") },
+                label = { Text("Search Music / Song ( सॉन्ग खोजें)") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 modifier = Modifier.fillMaxWidth().testTag("search_indicator"),
                 shape = RoundedCornerShape(12.dp)
             )
             Spacer(modifier = Modifier.height(20.dp))
+
             SectionHeader(title = "Lakshya Academic Portals (अकादमिक पोर्टल)")
             Academic3x3GridDashboard(onTabSelect = { tab ->
                 when (tab) {
@@ -179,7 +181,7 @@ fun StudentHomeDashboard(
             }
             
             Spacer(modifier = Modifier.height(8.dp))
-            SectionHeader(title = "Active Enrollment Batches (सक्रिय बैच)")
+            SectionHeader(title = "🎧 Study Break Zone")
         }
 
         if (filteredCourses.isEmpty()) {
@@ -333,22 +335,12 @@ fun CourseCard(
                 }
             }
 
-            // Footer Section with Price and Button
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            // Footer Section with Button
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp)
             ) {
-                Column {
-                    Text(
-                        text = if (course.isFree) "FREE" else "₹${course.price.toInt()}",
-                        fontWeight = FontWeight.Black,
-                        fontSize = 18.sp,
-                        color = if (course.isFree) Color(0xFF10B981) else Color(0xFF1E293B)
-                    )
-                    Text("Validity: 1 Year", fontSize = 11.sp, color = Color.Gray)
-                }
-                
                 Button(
                     onClick = {
                         if (isEnrolled) {
@@ -357,7 +349,9 @@ fun CourseCard(
                             onEnrollClick()
                         }
                     },
-                    modifier = Modifier.height(40.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(42.dp),
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (isEnrolled) Color(0xFF10B981) else Color(0xFF6366F1)
@@ -365,7 +359,7 @@ fun CourseCard(
                     contentPadding = PaddingValues(horizontal = 16.dp)
                 ) {
                     Text(
-                        text = if (isEnrolled) "Continue Learning" else "Enroll Now",
+                        text = if (isEnrolled) "Continue Play" else "Play Music",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp
@@ -391,13 +385,13 @@ fun StudentMyCourses(
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text("My Enrolled Batches", fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
+        Text("My Enrolled Music", fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
         Spacer(modifier = Modifier.height(16.dp))
         if (myEnrolledCourses.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.School, contentDescription = null, modifier = Modifier.size(64.dp), tint = Color.LightGray)
-                    Text("You haven't enrolled in any batch yet.", color = Color.Gray, modifier = Modifier.padding(top = 12.dp))
+                    Icon(Icons.Default.Headphones, contentDescription = null, modifier = Modifier.size(64.dp), tint = Color.LightGray)
+                    Text("You haven't enrolled in any music yet.", color = Color.Gray, modifier = Modifier.padding(top = 12.dp))
                 }
             }
         } else {
@@ -432,7 +426,7 @@ fun StudentMyCourses(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Let's Study (पढ़ाई चालू करें)")
+                                    Text("Let's Play (चलो सुनें)")
                                 }
                             }
                         }
@@ -521,8 +515,9 @@ fun CommunityPopupDialog(
                                         .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                                         .background(MaterialTheme.colorScheme.surfaceVariant)
                                 ) {
+                                    val resolvedImg = com.example.service.MediaStorageServiceFactory.getService(context).resolveMediaUrl(config.imageUrl)
                                     AsyncImage(
-                                        model = config.imageUrl,
+                                        model = resolvedImg,
                                         contentDescription = "Community Banner",
                                         modifier = Modifier.fillMaxSize(),
                                         contentScale = ContentScale.Crop

@@ -69,7 +69,7 @@ val envFile = rootProject.file(".env")
 
 // Keys we want to synchronize from system environment to .env
 val varsToSync = listOf(
-    "GEMINI_API_KEY",
+    "LAKSHYA_GEMINI_API_KEY",
     "SUPABASE_URL",
     "SUPABASE_ANON_KEY",
     "SUPABASE_TABLE",
@@ -92,7 +92,7 @@ val resolvedVars = mutableMapOf<String, String>()
 // Pre-fill with placeholders or defaults
 varsToSync.forEach { key ->
     resolvedVars[key] = when (key) {
-        "GEMINI_API_KEY" -> "YOUR_GEMINI_API_KEY"
+        "LAKSHYA_GEMINI_API_KEY" -> "YOUR_LAKSHYA_GEMINI_API_KEY"
         "SUPABASE_URL" -> "YOUR_SUPABASE_URL"
         "SUPABASE_ANON_KEY" -> "YOUR_SUPABASE_ANON_KEY"
         "SUPABASE_TABLE" -> "videos"
@@ -131,16 +131,22 @@ if (envFile.exists()) {
 varsToSync.forEach { key ->
     val envValue = System.getenv(key) ?: ""
     val cleanedValue = envValue.trim().removeSurrounding("\"").removeSurrounding("'").trim()
-    if (cleanedValue.isNotBlank() && cleanedValue != "YOUR_${key}" && cleanedValue != "YOUR_GEMINI_API_KEY") {
+    if (cleanedValue.isNotBlank() && cleanedValue != "YOUR_${key}" && cleanedValue != "YOUR_GEMINI_API_KEY" && cleanedValue != "YOUR_LAKSHYA_GEMINI_API_KEY") {
         resolvedVars[key] = cleanedValue
     }
 }
 
 // Special check for older/alternate names
+val envGeminiKey = System.getenv("GEMINI_API_KEY") ?: ""
+val cleanedGeminiKey = envGeminiKey.trim().removeSurrounding("\"").removeSurrounding("'").trim()
+if (cleanedGeminiKey.isNotBlank() && (resolvedVars["LAKSHYA_GEMINI_API_KEY"] == "YOUR_LAKSHYA_GEMINI_API_KEY" || resolvedVars["LAKSHYA_GEMINI_API_KEY"].isNullOrBlank())) {
+    resolvedVars["LAKSHYA_GEMINI_API_KEY"] = cleanedGeminiKey
+}
+
 val envMyKey = System.getenv("MY_API_KEY") ?: ""
 val cleanedMyKey = envMyKey.trim().removeSurrounding("\"").removeSurrounding("'").trim()
-if (cleanedMyKey.isNotBlank() && (resolvedVars["GEMINI_API_KEY"] == "YOUR_GEMINI_API_KEY" || resolvedVars["GEMINI_API_KEY"].isNullOrBlank())) {
-    resolvedVars["GEMINI_API_KEY"] = cleanedMyKey
+if (cleanedMyKey.isNotBlank() && (resolvedVars["LAKSHYA_GEMINI_API_KEY"] == "YOUR_LAKSHYA_GEMINI_API_KEY" || resolvedVars["LAKSHYA_GEMINI_API_KEY"].isNullOrBlank())) {
+    resolvedVars["LAKSHYA_GEMINI_API_KEY"] = cleanedMyKey
 }
 
 // Write everything back to .env
