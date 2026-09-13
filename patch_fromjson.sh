@@ -1,1 +1,0 @@
-sed -i 's/visibility = obj.optBoolean("visibility", true)/visibility = obj.optBoolean("visibility", true),\n                            pdfUrl = if (!obj.isNull("pdf_url")) obj.optString("pdf_url") else null/' app/src/main/java/com/example/api/R2SupabaseManager.kt
